@@ -1,0 +1,29 @@
+{
+  "pillars": [
+    {
+      "id": "cases",
+      "label": "Cases",
+      "rules": ["Show before and after", "Include a concrete result or lesson"]
+    },
+    {
+      "id": "errors",
+      "label": "Errors",
+      "rules": ["Name a costly mistake", "Explain the fix in plain language"]
+    },
+    {
+      "id": "breakdowns",
+      "label": "Breakdowns",
+      "rules": ["Analyze a real pattern", "Make the takeaway actionable"]
+    },
+    {
+      "id": "mini_guides",
+      "label": "Mini guides",
+      "rules": ["Use steps or a checklist", "Keep one clear outcome"]
+    },
+    {
+      "id": "personal_experience",
+      "label": "Personal experience",
+      "rules": ["Lead with a specific lesson", "Tie the story to the offer"]
+    }
+  ]
+}

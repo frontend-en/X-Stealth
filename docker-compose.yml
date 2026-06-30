@@ -1,0 +1,103 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: x-stealth-autoposter-backend:local
+    restart: unless-stopped
+    command: python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DRY_RUN: ${DRY_RUN:-true}
+      POSTING_ENABLED: ${POSTING_ENABLED:-false}
+      HEADLESS: ${HEADLESS:-true}
+      X_BASE_URL: ${X_BASE_URL:-https://x.com}
+      SLOW_MO_MS: ${SLOW_MO_MS:-0}
+      VIEWPORT_WIDTH: ${VIEWPORT_WIDTH:-1365}
+      VIEWPORT_HEIGHT: ${VIEWPORT_HEIGHT:-768}
+      AUTH_STATE_PATH: ${AUTH_STATE_PATH:-auth.json}
+      DATA_PATH: ${DATA_PATH:-data/tweets.txt}
+      LOGS_DIR: ${LOGS_DIR:-logs}
+      SCREENSHOTS_DIR: ${SCREENSHOTS_DIR:-screenshots}
+      TRACES_DIR: ${TRACES_DIR:-traces}
+      MIN_ACTION_DELAY_MS: ${MIN_ACTION_DELAY_MS:-300}
+      MAX_ACTION_DELAY_MS: ${MAX_ACTION_DELAY_MS:-1600}
+      MIN_POST_INTERVAL_MINUTES: ${MIN_POST_INTERVAL_MINUTES:-180}
+      WARMUP_MIN_SCROLLS: ${WARMUP_MIN_SCROLLS:-2}
+      WARMUP_MAX_SCROLLS: ${WARMUP_MAX_SCROLLS:-5}
+      NAVIGATION_TIMEOUT_MS: ${NAVIGATION_TIMEOUT_MS:-60000}
+      POST_TIMEOUT_MS: ${POST_TIMEOUT_MS:-45000}
+      PROXY_URL: ${PROXY_URL:-}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./backend/auth.json:/app/auth.json:ro
+      - ./backend/data:/app/data
+      - ./backend/logs:/app/logs
+      - ./backend/screenshots:/app/screenshots
+      - ./backend/traces:/app/traces
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8000}
+    image: x-stealth-autoposter-frontend:local
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  bot:
+    profiles:
+      - bot
+    image: x-stealth-autoposter-backend:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m src.main
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DRY_RUN: ${DRY_RUN:-true}
+      POSTING_ENABLED: ${POSTING_ENABLED:-false}
+      HEADLESS: ${HEADLESS:-true}
+      X_BASE_URL: ${X_BASE_URL:-https://x.com}
+      SLOW_MO_MS: ${SLOW_MO_MS:-0}
+      VIEWPORT_WIDTH: ${VIEWPORT_WIDTH:-1365}
+      VIEWPORT_HEIGHT: ${VIEWPORT_HEIGHT:-768}
+      AUTH_STATE_PATH: ${AUTH_STATE_PATH:-auth.json}
+      DATA_PATH: ${DATA_PATH:-data/tweets.txt}
+      LOGS_DIR: ${LOGS_DIR:-logs}
+      SCREENSHOTS_DIR: ${SCREENSHOTS_DIR:-screenshots}
+      TRACES_DIR: ${TRACES_DIR:-traces}
+      MIN_ACTION_DELAY_MS: ${MIN_ACTION_DELAY_MS:-300}
+      MAX_ACTION_DELAY_MS: ${MAX_ACTION_DELAY_MS:-1600}
+      MIN_POST_INTERVAL_MINUTES: ${MIN_POST_INTERVAL_MINUTES:-180}
+      WARMUP_MIN_SCROLLS: ${WARMUP_MIN_SCROLLS:-2}
+      WARMUP_MAX_SCROLLS: ${WARMUP_MAX_SCROLLS:-5}
+      NAVIGATION_TIMEOUT_MS: ${NAVIGATION_TIMEOUT_MS:-60000}
+      POST_TIMEOUT_MS: ${POST_TIMEOUT_MS:-45000}
+      PROXY_URL: ${PROXY_URL:-}
+    volumes:
+      - ./backend/auth.json:/app/auth.json:ro
+      - ./backend/data:/app/data
+      - ./backend/logs:/app/logs
+      - ./backend/screenshots:/app/screenshots
+      - ./backend/traces:/app/traces

@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+auth.json
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+logs/
+screenshots/
+traces/
+data/runs.jsonl

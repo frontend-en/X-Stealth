@@ -1,0 +1,27 @@
+services:
+  api:
+    image: ${BACKEND_IMAGE:-x-stealth-autoposter-backend:prod}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: "${LOG_MAX_FILE:-5}"
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-x-stealth-autoposter-frontend:prod}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: "${LOG_MAX_FILE:-5}"
+
+  bot:
+    image: ${BACKEND_IMAGE:-x-stealth-autoposter-backend:prod}
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: "${LOG_MAX_FILE:-5}"

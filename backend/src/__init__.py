@@ -1,0 +1,1 @@
+"""X autoposter package."""

@@ -1,0 +1,354 @@
+"""FastAPI app for the dashboard integration."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
+
+from src.api.errors import api_error
+from src.api.schemas import (
+    AgentCapabilities,
+    AgentDraftResponse,
+    AgentPublishDecision,
+    AgentPublishRequest,
+    AgentProposalRequest,
+    ArtifactListResponse,
+    ArtifactType,
+    CreateQueueItemRequest,
+    CreateQueueItemResponse,
+    CreateAgentDraftRequest,
+    DraftProposal,
+    HealthResponse,
+    QueueItemDetail,
+    QueueListResponse,
+    RunDetail,
+    RunListResponse,
+    StartPublishRequest,
+    StartRunRequest,
+    StartRunResponse,
+    UpdateQueueItemRequest,
+    ValidatePostRequest,
+    ValidationResult,
+)
+from src.agent.harness import AgentHarness
+from src.config import Settings, load_settings
+from src.logging_config import setup_logging
+from src.services.artifact_service import ArtifactService
+from src.services.funnel_service import FunnelService
+from src.services.quality_service import QualityService
+from src.services.queue_service import QueueService, validate_post_text
+from src.services.run_service import RunService
+from src.services.settings_service import get_public_settings
+
+app = FastAPI(title="X Stealth AutoPoster API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+def get_settings() -> Settings:
+    settings = load_settings()
+    setup_logging(settings.log_level, settings.logs_dir)
+    return settings
+
+
+def get_queue_service(settings: Annotated[Settings, Depends(get_settings)]) -> QueueService:
+    return QueueService(settings.data_path, settings.agent_queue_path)
+
+
+def get_artifact_service(settings: Annotated[Settings, Depends(get_settings)]) -> ArtifactService:
+    return ArtifactService(settings)
+
+
+def get_quality_service() -> QualityService:
+    return QualityService()
+
+
+def get_funnel_service(settings: Annotated[Settings, Depends(get_settings)]) -> FunnelService:
+    return FunnelService(settings.data_path.parent)
+
+
+def get_run_service(
+    settings: Annotated[Settings, Depends(get_settings)],
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    artifact_service: Annotated[ArtifactService, Depends(get_artifact_service)],
+) -> RunService:
+    if not hasattr(app.state, "run_service"):
+        app.state.run_service = RunService(settings, queue_service, artifact_service)
+    return app.state.run_service
+
+
+def get_agent_harness(
+    settings: Annotated[Settings, Depends(get_settings)],
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    artifact_service: Annotated[ArtifactService, Depends(get_artifact_service)],
+) -> AgentHarness:
+    return AgentHarness(settings, queue_service, run_service, artifact_service)
+
+
+@app.get("/api/v1/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse(status="ok", version=app.version, time=datetime.now(timezone.utc))
+
+
+@app.get("/api/v1/settings")
+def settings(settings_obj: Annotated[Settings, Depends(get_settings)]):
+    return get_public_settings(settings_obj)
+
+
+@app.get("/api/v1/queue", response_model=QueueListResponse)
+def list_queue(
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> QueueListResponse:
+    items, total = queue_service.list_items(limit=limit, offset=offset)
+    return QueueListResponse(items=items, total=total)
+
+
+@app.get("/api/v1/queue/{item_id}", response_model=QueueItemDetail)
+def get_queue_item(
+    item_id: str,
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    quality_service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QueueItemDetail:
+    item = queue_service.get_item(item_id)
+    if item is None:
+        raise api_error(404, "NOT_FOUND", "Queue item was not found.", {"itemId": item_id})
+    runs = [run for run in run_service.list_runs(limit=200) if run.queueItemId == item_id]
+    return QueueItemDetail(
+        **item.model_dump(),
+        validation=validate_post_text(item.text),
+        quality=quality_service.evaluate(item, queue_service.list_items(limit=200)[0]),
+        runs=runs,
+    )
+
+
+@app.post("/api/v1/queue/validate", response_model=ValidationResult)
+def validate_queue_item(request: ValidatePostRequest) -> ValidationResult:
+    return validate_post_text(request.text)
+
+
+@app.post("/api/v1/queue", response_model=CreateQueueItemResponse)
+def create_queue_item(
+    request: CreateQueueItemRequest,
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+) -> CreateQueueItemResponse:
+    item = queue_service.create_item(
+        request.text,
+        source="api",
+        scheduled_for=request.scheduledFor,
+        pillar=request.pillar,
+        cta_type=request.ctaType,
+        target_url=request.targetUrl,
+        utm_campaign=request.utmCampaign,
+        utm_content=request.utmContent,
+        notes=request.notes,
+    )
+    return CreateQueueItemResponse(id=item.id, status=item.status)
+
+
+@app.patch("/api/v1/queue/{item_id}", response_model=QueueItemDetail)
+def update_queue_item(
+    item_id: str,
+    request: UpdateQueueItemRequest,
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    quality_service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QueueItemDetail:
+    item = queue_service.update_item(
+        item_id,
+        text=request.text,
+        pillar=request.pillar,
+        cta_type=request.ctaType,
+        target_url=request.targetUrl,
+        utm_campaign=request.utmCampaign,
+        utm_content=request.utmContent,
+        notes=request.notes,
+        scheduled_for=request.scheduledFor,
+    )
+    if item is None:
+        raise api_error(404, "NOT_FOUND", "Queue item was not found.", {"itemId": item_id})
+    runs = [run for run in run_service.list_runs(limit=200) if run.queueItemId == item_id]
+    return QueueItemDetail(
+        **item.model_dump(),
+        validation=validate_post_text(item.text),
+        quality=quality_service.evaluate(item, queue_service.list_items(limit=200)[0]),
+        runs=runs,
+    )
+
+
+@app.post("/api/v1/queue/{item_id}/approve", response_model=QueueItemDetail)
+def approve_queue_item(
+    item_id: str,
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    quality_service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QueueItemDetail:
+    try:
+        item = queue_service.approve_item(item_id)
+    except ValueError as exc:
+        raise api_error(409, "APPROVAL_BLOCKED", str(exc), {"itemId": item_id}) from exc
+    if item is None:
+        raise api_error(404, "NOT_FOUND", "Queue item was not found.", {"itemId": item_id})
+    runs = [run for run in run_service.list_runs(limit=200) if run.queueItemId == item_id]
+    return QueueItemDetail(
+        **item.model_dump(),
+        validation=validate_post_text(item.text),
+        quality=quality_service.evaluate(item, queue_service.list_items(limit=200)[0]),
+        runs=runs,
+    )
+
+
+@app.post("/api/v1/queue/{item_id}/skip", response_model=QueueItemDetail)
+def skip_queue_item(
+    item_id: str,
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    quality_service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QueueItemDetail:
+    item = queue_service.skip_item(item_id)
+    if item is None:
+        raise api_error(404, "NOT_FOUND", "Queue item was not found.", {"itemId": item_id})
+    runs = [run for run in run_service.list_runs(limit=200) if run.queueItemId == item_id]
+    return QueueItemDetail(
+        **item.model_dump(),
+        validation=validate_post_text(item.text),
+        quality=quality_service.evaluate(item, queue_service.list_items(limit=200)[0]),
+        runs=runs,
+    )
+
+
+@app.post("/api/v1/queue/{item_id}/reject", response_model=QueueItemDetail)
+def reject_queue_item(
+    item_id: str,
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    quality_service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QueueItemDetail:
+    item = queue_service.reject_item(item_id)
+    if item is None:
+        raise api_error(404, "NOT_FOUND", "Queue item was not found.", {"itemId": item_id})
+    runs = [run for run in run_service.list_runs(limit=200) if run.queueItemId == item_id]
+    return QueueItemDetail(
+        **item.model_dump(),
+        validation=validate_post_text(item.text),
+        quality=quality_service.evaluate(item, queue_service.list_items(limit=200)[0]),
+        runs=runs,
+    )
+
+
+@app.get("/api/v1/runs", response_model=RunListResponse)
+def list_runs(
+    run_service: Annotated[RunService, Depends(get_run_service)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> RunListResponse:
+    items = run_service.list_runs(limit=limit)
+    return RunListResponse(items=items, total=len(items))
+
+
+@app.get("/api/v1/runs/{run_id}", response_model=RunDetail)
+def get_run(run_id: str, run_service: Annotated[RunService, Depends(get_run_service)]) -> RunDetail:
+    run = run_service.get_run(run_id)
+    if run is None:
+        raise api_error(404, "NOT_FOUND", "Run was not found.", {"runId": run_id})
+    return run
+
+
+@app.post("/api/v1/runs/dry-run", response_model=StartRunResponse)
+def start_dry_run(request: StartRunRequest, run_service: Annotated[RunService, Depends(get_run_service)]):
+    run = run_service.start_dry_run(request.queueItemId)
+    return StartRunResponse(runId=run.id, status=run.status)
+
+
+@app.post("/api/v1/runs/publish", response_model=StartRunResponse)
+def start_publish(request: StartPublishRequest, run_service: Annotated[RunService, Depends(get_run_service)]):
+    if not request.confirm:
+        raise api_error(400, "VALIDATION_ERROR", "Publish confirmation is required.", {"field": "confirm"})
+    allowed, reason = run_service.can_start_publish(request.queueItemId)
+    if not allowed:
+        raise api_error(409, "POSTING_DISABLED", reason or "Publishing is disabled.")
+    run = run_service.start_publish(request.queueItemId)
+    return StartRunResponse(runId=run.id, status=run.status)
+
+
+@app.get("/api/v1/artifacts", response_model=ArtifactListResponse)
+def list_artifacts(
+    artifact_service: Annotated[ArtifactService, Depends(get_artifact_service)],
+    type: ArtifactType | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ArtifactListResponse:
+    return ArtifactListResponse(items=artifact_service.list_artifacts(artifact_type=type, limit=limit))
+
+
+@app.get("/api/v1/artifacts/{artifact_id}/download")
+def download_artifact(artifact_id: str, artifact_service: Annotated[ArtifactService, Depends(get_artifact_service)]):
+    path = artifact_service.resolve_artifact_path(artifact_id)
+    if path is None:
+        raise api_error(404, "ARTIFACT_NOT_ALLOWED", "Artifact was not found or is not allowed.")
+    return FileResponse(path)
+
+
+@app.get("/api/v1/funnel/export.csv")
+def export_funnel_csv(funnel_service: Annotated[FunnelService, Depends(get_funnel_service)]):
+    return Response(
+        content=funnel_service.export_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="funnel-export.csv"'},
+    )
+
+
+@app.get("/api/v1/agent/capabilities", response_model=AgentCapabilities)
+def agent_capabilities(harness: Annotated[AgentHarness, Depends(get_agent_harness)]) -> AgentCapabilities:
+    return harness.get_capabilities()
+
+
+@app.post("/api/v1/agent/proposals", response_model=DraftProposal)
+def agent_propose_post(
+    request: AgentProposalRequest,
+    harness: Annotated[AgentHarness, Depends(get_agent_harness)],
+) -> DraftProposal:
+    return harness.propose_post(request)
+
+
+@app.post("/api/v1/agent/drafts", response_model=AgentDraftResponse)
+def agent_create_draft(
+    request: CreateAgentDraftRequest,
+    harness: Annotated[AgentHarness, Depends(get_agent_harness)],
+) -> AgentDraftResponse:
+    try:
+        return harness.create_draft(request)
+    except ValueError as exc:
+        raise api_error(400, "POLICY_BLOCKED", str(exc)) from exc
+
+
+@app.post("/api/v1/agent/runs/dry-run", response_model=StartRunResponse)
+def agent_start_dry_run(
+    request: StartRunRequest,
+    harness: Annotated[AgentHarness, Depends(get_agent_harness)],
+) -> StartRunResponse:
+    try:
+        run = harness.start_dry_run(request.queueItemId)
+    except ValueError as exc:
+        raise api_error(400, "POLICY_BLOCKED", str(exc)) from exc
+    return StartRunResponse(runId=run.id, status=run.status)
+
+
+@app.post("/api/v1/agent/runs/publish-request", response_model=AgentPublishDecision)
+def agent_request_publish(
+    request: AgentPublishRequest,
+    harness: Annotated[AgentHarness, Depends(get_agent_harness)],
+) -> AgentPublishDecision:
+    return harness.request_publish(request)

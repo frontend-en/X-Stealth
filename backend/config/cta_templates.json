@@ -1,0 +1,34 @@
+{
+  "ctaTypes": [
+    {
+      "id": "checklist",
+      "label": "Checklist",
+      "defaultText": "I made a checklist for this:"
+    },
+    {
+      "id": "audit",
+      "label": "Audit",
+      "defaultText": "Want the same audit for your site?"
+    },
+    {
+      "id": "consultation",
+      "label": "Consultation",
+      "defaultText": "Book a short consult here:"
+    },
+    {
+      "id": "template",
+      "label": "Template",
+      "defaultText": "Use the template here:"
+    },
+    {
+      "id": "case_study",
+      "label": "Case study",
+      "defaultText": "Full case study:"
+    },
+    {
+      "id": "newsletter",
+      "label": "Newsletter",
+      "defaultText": "More examples in the newsletter:"
+    }
+  ]
+}
