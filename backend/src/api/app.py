@@ -53,11 +53,22 @@ from src.services.queue_service import QueueService, validate_post_text
 from src.services.run_service import RunService
 from src.services.settings_service import get_public_settings
 
+
+def _cors_origins() -> list[str]:
+    local_origins = {"http://127.0.0.1:5173", "http://localhost:5173"}
+    configured_origins = {
+        origin.strip()
+        for origin in load_settings().cors_origins.split(",")
+        if origin.strip()
+    }
+    return sorted(local_origins | configured_origins)
+
+
 app = FastAPI(title="X Stealth AutoPoster API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=_cors_origins(),
     allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
     allow_credentials=False,
     allow_methods=["GET", "POST"],

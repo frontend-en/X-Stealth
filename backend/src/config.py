@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     )
 
     log_level: str = "INFO"
+    cors_origins: str = ""
     dry_run: bool = True
     posting_enabled: bool = False
 

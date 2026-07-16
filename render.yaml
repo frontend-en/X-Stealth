@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: x-stealth-api
+    repo: https://github.com/frontend-en/X-Stealth
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    branch: main
+    autoDeploy: true
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python -m uvicorn src.api.app:app --host 0.0.0.0 --port 10000
+    healthCheckPath: /api/v1/health
+    disk:
+      name: x-stealth-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ORIGINS
+        value: https://frontend-fes-projects-6ccc2adf.vercel.app
+      - key: DRY_RUN
+        value: "true"
+      - key: POSTING_ENABLED
+        value: "false"
+      - key: HEADLESS
+        value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
