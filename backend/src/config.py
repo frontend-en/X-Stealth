@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     agent_publish_requires_approval: bool = True
     agent_require_successful_dry_run_before_publish: bool = True
 
+    openai_api_key: str | None = None
+    openai_model: str | None = None
+    pipeline_conversations_path: Path = Path("data/conversations.jsonl")
+    pipeline_messages_path: Path = Path("data/chat_messages.jsonl")
+    pipeline_runs_path: Path = Path("data/pipeline_runs.jsonl")
+
     @field_validator("max_action_delay_ms")
     @classmethod
     def validate_delay_range(cls, value: int, info) -> int:

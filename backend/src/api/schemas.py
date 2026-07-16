@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -241,3 +241,104 @@ class AgentPublishDecision(BaseModel):
     requiredActions: list[str] = Field(default_factory=list)
     runId: str | None = None
     status: RunStatus | None = None
+
+
+PipelineRunStatus = Literal["queued", "running", "completed", "failed", "interrupted"]
+PipelineStageStatus = Literal["pending", "running", "completed", "failed"]
+ChatRole = Literal["user", "assistant"]
+
+
+class Conversation(BaseModel):
+    id: str
+    title: str
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class ChatMessage(BaseModel):
+    id: str
+    conversationId: str
+    role: ChatRole
+    content: str = Field(max_length=4000)
+    createdAt: datetime
+    pipelineRunId: str | None = None
+
+
+class PipelineArtifact(BaseModel):
+    type: Literal["source", "agent_output"] = "source"
+    title: str
+    url: str | None = None
+    publishedAt: str | None = None
+    summary: str = ""
+
+
+class PostCandidate(BaseModel):
+    id: str
+    text: str = Field(max_length=280)
+    score: int = Field(ge=0, le=100)
+    rationale: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PipelineStage(BaseModel):
+    id: str
+    name: str
+    role: str
+    status: PipelineStageStatus = "pending"
+    summary: str = ""
+    output: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    artifacts: list[PipelineArtifact] = Field(default_factory=list)
+    startedAt: datetime | None = None
+    finishedAt: datetime | None = None
+    error: str | None = None
+
+
+class PipelineRun(BaseModel):
+    id: str
+    conversationId: str
+    messageId: str
+    status: PipelineRunStatus = "queued"
+    progress: int = Field(default=0, ge=0, le=100)
+    stages: list[PipelineStage]
+    candidates: list[PostCandidate] = Field(default_factory=list)
+    finalRecommendation: str = ""
+    createdAt: datetime
+    updatedAt: datetime
+    completedAt: datetime | None = None
+
+
+class ConversationDetail(Conversation):
+    messages: list[ChatMessage] = Field(default_factory=list)
+    runs: list[PipelineRun] = Field(default_factory=list)
+
+
+class CreateConversationRequest(BaseModel):
+    title: str = Field(default="Новый AI-диалог", min_length=1, max_length=120)
+
+
+class CreateConversationResponse(BaseModel):
+    id: str
+
+
+class CreateChatMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class StartPipelineResponse(BaseModel):
+    messageId: str
+    pipelineRunId: str
+
+
+class CreatePipelineDraftRequest(BaseModel):
+    candidateId: str
+    pillar: PostPillar | None = None
+    ctaType: CtaType | None = None
+    targetUrl: str | None = Field(default=None, max_length=2000)
+    utmCampaign: str | None = Field(default=None, max_length=200)
+    utmContent: str | None = Field(default=None, max_length=200)
+
+
+class CreatePipelineDraftResponse(BaseModel):
+    id: str
+    status: QueueItemStatus

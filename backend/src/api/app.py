@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from src.api.errors import api_error
 from src.api.schemas import (
@@ -20,6 +20,14 @@ from src.api.schemas import (
     ArtifactType,
     CreateQueueItemRequest,
     CreateQueueItemResponse,
+    ConversationDetail,
+    CreateChatMessageRequest,
+    CreateConversationRequest,
+    CreateConversationResponse,
+    CreatePipelineDraftRequest,
+    CreatePipelineDraftResponse,
+    PipelineRun,
+    StartPipelineResponse,
     CreateAgentDraftRequest,
     DraftProposal,
     HealthResponse,
@@ -35,6 +43,7 @@ from src.api.schemas import (
     ValidationResult,
 )
 from src.agent.harness import AgentHarness
+from src.agent.pipeline import PipelineOrchestrator
 from src.config import Settings, load_settings
 from src.logging_config import setup_logging
 from src.services.artifact_service import ArtifactService
@@ -95,6 +104,15 @@ def get_agent_harness(
     artifact_service: Annotated[ArtifactService, Depends(get_artifact_service)],
 ) -> AgentHarness:
     return AgentHarness(settings, queue_service, run_service, artifact_service)
+
+
+def get_pipeline_orchestrator(
+    settings: Annotated[Settings, Depends(get_settings)],
+    queue_service: Annotated[QueueService, Depends(get_queue_service)],
+) -> PipelineOrchestrator:
+    if not hasattr(app.state, "pipeline_orchestrator"):
+        app.state.pipeline_orchestrator = PipelineOrchestrator(settings, queue_service)
+    return app.state.pipeline_orchestrator
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)
@@ -274,7 +292,7 @@ def start_dry_run(request: StartRunRequest, run_service: Annotated[RunService, D
 
 
 @app.post("/api/v1/runs/publish", response_model=StartRunResponse)
-def start_publish(request: StartPublishRequest, run_service: Annotated[RunService, Depends(get_run_service)]):
+async def start_publish(request: StartPublishRequest, run_service: Annotated[RunService, Depends(get_run_service)]):
     if not request.confirm:
         raise api_error(400, "VALIDATION_ERROR", "Publish confirmation is required.", {"field": "confirm"})
     allowed, reason = run_service.can_start_publish(request.queueItemId)
@@ -352,3 +370,93 @@ def agent_request_publish(
     harness: Annotated[AgentHarness, Depends(get_agent_harness)],
 ) -> AgentPublishDecision:
     return harness.request_publish(request)
+
+
+@app.post("/api/v1/conversations", response_model=CreateConversationResponse)
+def create_conversation(
+    request: CreateConversationRequest,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+) -> CreateConversationResponse:
+    conversation = orchestrator.create_conversation(request.title)
+    return CreateConversationResponse(id=conversation.id)
+
+
+@app.get("/api/v1/conversations/{conversation_id}", response_model=ConversationDetail)
+def get_conversation(
+    conversation_id: str,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+) -> ConversationDetail:
+    conversation = orchestrator.get_conversation(conversation_id)
+    if conversation is None:
+        raise api_error(404, "NOT_FOUND", "Conversation was not found.", {"conversationId": conversation_id})
+    return conversation
+
+
+@app.post("/api/v1/conversations/{conversation_id}/messages", response_model=StartPipelineResponse)
+async def create_chat_message(
+    conversation_id: str,
+    request: CreateChatMessageRequest,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+) -> StartPipelineResponse:
+    try:
+        message, run = orchestrator.start(conversation_id, request.content)
+    except ValueError as exc:
+        raise api_error(404, "NOT_FOUND", str(exc), {"conversationId": conversation_id}) from exc
+    return StartPipelineResponse(messageId=message.id, pipelineRunId=run.id)
+
+
+@app.get("/api/v1/pipeline-runs/{run_id}", response_model=PipelineRun)
+def get_pipeline_run(
+    run_id: str,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+) -> PipelineRun:
+    run = orchestrator.get_run(run_id)
+    if run is None:
+        raise api_error(404, "NOT_FOUND", "Pipeline run was not found.", {"pipelineRunId": run_id})
+    return run
+
+
+@app.get("/api/v1/pipeline-runs/{run_id}/events")
+async def stream_pipeline_run(
+    run_id: str,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+):
+    if orchestrator.get_run(run_id) is None:
+        raise api_error(404, "NOT_FOUND", "Pipeline run was not found.", {"pipelineRunId": run_id})
+    return StreamingResponse(
+        orchestrator.stream(run_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/v1/pipeline-runs/{run_id}/retry", response_model=PipelineRun)
+async def retry_pipeline_run(
+    run_id: str,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+) -> PipelineRun:
+    try:
+        return orchestrator.retry(run_id)
+    except ValueError as exc:
+        raise api_error(409, "RETRY_BLOCKED", str(exc), {"pipelineRunId": run_id}) from exc
+
+
+@app.post("/api/v1/pipeline-runs/{run_id}/create-draft", response_model=CreatePipelineDraftResponse)
+def create_pipeline_draft(
+    run_id: str,
+    request: CreatePipelineDraftRequest,
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_pipeline_orchestrator)],
+) -> CreatePipelineDraftResponse:
+    try:
+        item = orchestrator.create_draft(
+            run_id,
+            request.candidateId,
+            pillar=request.pillar,
+            cta_type=request.ctaType,
+            target_url=request.targetUrl,
+            utm_campaign=request.utmCampaign,
+            utm_content=request.utmContent,
+        )
+    except ValueError as exc:
+        raise api_error(409, "DRAFT_BLOCKED", str(exc), {"pipelineRunId": run_id}) from exc
+    return CreatePipelineDraftResponse(id=item.id, status=item.status)

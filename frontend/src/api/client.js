@@ -106,3 +106,38 @@ export function requestAgentPublish(queueItemId, confirm = false, approvalNote =
     body: JSON.stringify({ queueItemId, confirm, approvalNote })
   });
 }
+
+export { API_BASE_URL };
+
+export function createConversation(title = "Новый AI-диалог") {
+  return request("/api/v1/conversations", {
+    method: "POST",
+    body: JSON.stringify({ title })
+  });
+}
+
+export function getConversation(conversationId) {
+  return request(`/api/v1/conversations/${conversationId}`);
+}
+
+export function sendChatMessage(conversationId, content) {
+  return request(`/api/v1/conversations/${conversationId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content })
+  });
+}
+
+export function getPipelineRun(runId) {
+  return request(`/api/v1/pipeline-runs/${runId}`);
+}
+
+export function retryPipelineRun(runId) {
+  return request(`/api/v1/pipeline-runs/${runId}/retry`, { method: "POST" });
+}
+
+export function createPipelineDraft(runId, candidateId) {
+  return request(`/api/v1/pipeline-runs/${runId}/create-draft`, {
+    method: "POST",
+    body: JSON.stringify({ candidateId })
+  });
+}

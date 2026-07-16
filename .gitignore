@@ -27,10 +27,15 @@ traces/
 backend/data/runs.jsonl
 backend/data/queue.jsonl
 backend/data/agent_events.jsonl
+backend/data/chat_messages.jsonl
+backend/data/conversations.jsonl
+backend/data/pipeline_runs.jsonl
+backend/data/posts.jsonl
 backend/logs/
 backend/screenshots/
 backend/traces/
 *.log
+.playwright-mcp/
 
 # OS / editor
 .DS_Store

@@ -29,6 +29,21 @@ class OfferEngineTests(unittest.TestCase):
             self.assertIn("Post pillar is required.", result.errors)
             self.assertIn("Target URL is required.", result.errors)
 
+    def test_ai_studio_editorial_draft_does_not_require_external_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            service = QueueService(Path(tmp) / "tweets.txt", Path(tmp) / "queue.jsonl")
+            item = service.create_item(
+                "How to choose a houseplant: start with your light and watering routine.",
+                source="ai_studio:pipeline-1",
+                pillar="mini_guides",
+                cta_type="none",
+            )
+
+            result = QualityService().evaluate(item, service.list_items()[0])
+
+            self.assertTrue(result.valid)
+            self.assertNotIn("Target URL is required.", result.errors)
+
     def test_queue_approval_requires_dry_run_passed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             service = QueueService(Path(tmp) / "tweets.txt", Path(tmp) / "queue.jsonl")

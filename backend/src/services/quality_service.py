@@ -29,18 +29,25 @@ class QualityService:
         validation = validate_post_text(item.text)
         errors = list(validation.errors)
         warnings = list(validation.warnings)
+        is_editorial_ai_draft = item.source.startswith("ai_studio:") and item.ctaType == "none"
 
         if item.pillar is None:
             errors.append("Post pillar is required.")
         elif item.pillar not in self.pillars:
             errors.append("Post pillar is not configured.")
 
-        if item.ctaType is None or item.ctaType == "none":
+        if item.ctaType is None:
+            errors.append("CTA type is required.")
+        elif item.ctaType == "none" and is_editorial_ai_draft:
+            warnings.append("Editorial AI Studio draft has no external CTA or tracking URL.")
+        elif item.ctaType == "none":
             errors.append("CTA type is required.")
         elif item.ctaType not in self.cta_types:
             errors.append("CTA type is not configured.")
 
-        if not item.targetUrl:
+        if is_editorial_ai_draft:
+            pass
+        elif not item.targetUrl:
             errors.append("Target URL is required.")
         elif not self._looks_like_url(item.targetUrl):
             errors.append("Target URL must be an absolute http(s) URL.")

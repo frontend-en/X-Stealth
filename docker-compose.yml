@@ -9,6 +9,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       DRY_RUN: ${DRY_RUN:-true}
       POSTING_ENABLED: ${POSTING_ENABLED:-false}
       HEADLESS: ${HEADLESS:-true}
@@ -75,6 +77,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       DRY_RUN: ${DRY_RUN:-true}
       POSTING_ENABLED: ${POSTING_ENABLED:-false}
       HEADLESS: ${HEADLESS:-true}

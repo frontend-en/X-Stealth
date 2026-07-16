@@ -28,6 +28,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
   TerminalSquare,
   XCircle
 } from "lucide-react";
@@ -43,6 +44,7 @@ import {
   startDryRun,
   startPublish
 } from "./api/client";
+import AiStudio from "./components/AiStudio";
 import "./styles.css";
 
 const statusLabels = {
@@ -194,6 +196,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [runningAction, setRunningAction] = useState("");
+  const [view, setView] = useState("dashboard");
+  const [pendingSection, setPendingSection] = useState("");
 
   const refresh = useCallback(async () => {
     setError("");
@@ -217,6 +221,18 @@ function App() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [refresh]);
+
+  useEffect(() => {
+    if (view !== "dashboard" || !pendingSection) return;
+    document.getElementById(pendingSection)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setPendingSection("");
+  }, [view, pendingSection]);
+
+  function showDashboardSection(section) {
+    window.history.replaceState(null, "", `#${section}`);
+    setPendingSection(section);
+    setView("dashboard");
+  }
 
   const filteredQueue = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -291,25 +307,32 @@ function App() {
         </div>
 
         <nav>
-          <a className="active" href="#overview">
+          <button type="button" className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>
             <BarChart3 size={18} aria-hidden="true" />
             Обзор
-          </a>
-          <a href="#queue">
+          </button>
+          <button type="button" className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}>
+            <Sparkles size={18} aria-hidden="true" />
+            AI Studio
+          </button>
+          <button type="button" onClick={() => showDashboardSection("queue")}>
             <CalendarClock size={18} aria-hidden="true" />
             Очередь
-          </a>
-          <a href="#runs">
+          </button>
+          <button type="button" onClick={() => showDashboardSection("runs")}>
             <TerminalSquare size={18} aria-hidden="true" />
             Запуски
-          </a>
-          <a href="#artifacts">
+          </button>
+          <button type="button" onClick={() => showDashboardSection("artifacts")}>
             <Archive size={18} aria-hidden="true" />
             Артефакты
-          </a>
+          </button>
         </nav>
       </aside>
 
+      {view === "studio" ? (
+        <section className="content"><AiStudio onDraftCreated={() => { setView("dashboard"); refresh().catch((err) => setError(err.message)); }} /></section>
+      ) : (
       <section className="content" id="overview">
         <header className="topbar">
           <div>
@@ -633,6 +656,7 @@ function App() {
           </div>
         </section>
       </section>
+      )}
     </main>
   );
 }
