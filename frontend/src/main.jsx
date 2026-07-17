@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import {
   approveQueueItem,
+  API_BASE_URL,
   getArtifacts,
   getQueue,
   getRuns,
@@ -646,7 +647,7 @@ function App() {
           </div>
           <div className="artifact-list">
             {artifacts.slice(0, 8).map((artifact) => (
-              <a key={artifact.id} href={`${import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"}${artifact.downloadUrl}`}>
+              <a key={artifact.id} href={`${API_BASE_URL}${artifact.downloadUrl}`}>
                 <FileText size={16} aria-hidden="true" />
                 <span>{artifact.name}</span>
                 <small>{artifactTypeLabels[artifact.type] || artifact.type} / {formatNumber(artifact.sizeBytes)} байт</small>

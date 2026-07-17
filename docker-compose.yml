@@ -32,7 +32,7 @@ services:
       POST_TIMEOUT_MS: ${POST_TIMEOUT_MS:-45000}
       PROXY_URL: ${PROXY_URL:-}
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
     volumes:
       - ./backend/auth.json:/app/auth.json:ro
       - ./backend/data:/app/data
@@ -57,7 +57,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8000}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     image: x-stealth-autoposter-frontend:local
     restart: unless-stopped
     ports:
