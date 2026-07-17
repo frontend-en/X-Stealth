@@ -14,6 +14,17 @@ LOCAL_HEALTH_URL ?= http://127.0.0.1:8000/api/v1/health
 PROD_HEALTH_URL ?= http://127.0.0.1:8000/api/v1/health
 LOG_TAIL ?= 200
 
+# Remote VPS deployment settings. Override these on the make command line.
+VPS_HOST ?=
+VPS_USER ?= root
+VPS_PORT ?= 22
+VPS_PATH ?= /opt/x-stealth-autoposter
+VPS_SSH_KEY ?=
+VPS_TARGET = $(VPS_USER)@$(VPS_HOST)
+VPS_SSH_KEY_ARG = $(if $(VPS_SSH_KEY),-i "$(VPS_SSH_KEY)",)
+VPS_SSH = ssh -p $(VPS_PORT) -o BatchMode=yes -o StrictHostKeyChecking=accept-new $(VPS_SSH_KEY_ARG)
+DEPLOY_TAR_EXCLUDES = --exclude-vcs --exclude=.env --exclude=.env.local --exclude=.env.prod --exclude=backend/auth.json --exclude=backend/.venv --exclude=backend/__pycache__ --exclude=backend/**/__pycache__ --exclude=backend/logs --exclude=backend/screenshots --exclude=backend/traces --exclude=frontend/node_modules --exclude=frontend/dist
+
 .PHONY: help
 help:
 	@echo ""
@@ -44,6 +55,7 @@ help:
 	@echo "  make prod-health        Check production API health"
 	@echo "  make prod-pull          Pull production images"
 	@echo "  make prod-push          Push production images"
+	@echo "  make prod-first-deploy  Upload source to VPS and start the complete stack"
 	@echo ""
 	@echo "Verification:"
 	@echo "  make verify             Run backend compile, frontend build, compose config"
@@ -129,3 +141,17 @@ prod-pull: require-prod-env
 
 prod-push: require-prod-env
 	$(PROD_COMPOSE) push
+
+.PHONY: require-vps prod-first-deploy
+require-vps:
+	@test -n "$(VPS_HOST)" || { echo "Missing VPS_HOST. Example: make prod-first-deploy VPS_HOST=203.0.113.10" >&2; exit 1; }
+
+# Run this from the machine that owns the SSH private key. The archive omits
+# secrets and runtime artifacts; existing remote .env.prod and auth.json stay
+# untouched. On first run, safe defaults and an empty protected auth.json are
+# created on the VPS.
+prod-first-deploy: require-vps
+	@echo "Uploading application source to $(VPS_TARGET):$(VPS_PATH)"
+	tar -czf - $(DEPLOY_TAR_EXCLUDES) . | $(VPS_SSH) "$(VPS_TARGET)" "mkdir -p '$(VPS_PATH)' && tar -xzf - -C '$(VPS_PATH)'"
+	@echo "Building and starting the production stack on $(VPS_TARGET)"
+	$(VPS_SSH) "$(VPS_TARGET)" "set -eu; cd '$(VPS_PATH)'; test -f .env.prod || cp .env.prod.example .env.prod; mkdir -p backend/data backend/logs backend/screenshots backend/traces; test -f backend/auth.json || { umask 077; : > backend/auth.json; }; make prod-config; make prod-build; make prod-up; make prod-ps; make prod-health"
