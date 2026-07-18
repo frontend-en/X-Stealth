@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from datetime import timedelta
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,8 @@ class RunService:
         self.quality_service = QualityService()
         self.funnel_service = FunnelService(settings.data_path.parent)
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._publish_lock_path = settings.data_path.parent / "active-publish.lock"
+        self._owns_publish_lock = False
 
     def list_runs(self, limit: int = 50) -> list[RunRecord]:
         runs = self._read_runs()
@@ -102,6 +106,11 @@ class RunService:
             return False, "Auth state is missing."
         if any(not task.done() for task in self._tasks.values()):
             return False, "Another publish run is already active."
+        if self._publish_lock_path.exists():
+            return False, "Another publish run is already active."
+        next_allowed_at = self.next_publish_allowed_at()
+        if next_allowed_at is not None and self._now() < next_allowed_at:
+            return False, f"Next publish attempt is allowed at {next_allowed_at.isoformat()}."
         if queue_item_id is not None:
             item = self.queue_service.get_item(queue_item_id)
             if item is None:
@@ -110,6 +119,8 @@ class RunService:
                 return False, "Queue item must be approved before publishing."
             if not self._has_successful_dry_run(item):
                 return False, "A successful dry-run is required after the latest draft change."
+            if self._publish_attempt_count(item.id) >= self.settings.scheduler_max_publish_attempts:
+                return False, "Maximum publish attempts have been reached for this queue item."
         return True, None
 
     def start_publish(self, queue_item_id: str) -> RunRecord:
@@ -150,8 +161,19 @@ class RunService:
             return run
 
         run.qualityScore = item.qualityScore
+        if not self._acquire_publish_lock():
+            run.status = "blocked"
+            run.finishedAt = self._now()
+            run.message = "Another publish run is already active."
+            self._append_run(run)
+            self.funnel_service.log_event(item, status="publish_blocked", run_id=run.id, notes=run.message)
+            return run
         self._append_run(run)
-        self._tasks[run.id] = asyncio.create_task(self._execute_publish(run, item))
+        try:
+            self._tasks[run.id] = asyncio.create_task(self._execute_publish(run, item))
+        except Exception:
+            self._release_publish_lock()
+            raise
         return run
 
     async def _execute_publish(self, run: RunRecord, item) -> None:
@@ -159,34 +181,37 @@ class RunService:
         self._append_run(running)
         self.funnel_service.log_event(item, status="publish_started", run_id=run.id)
         try:
-            result = await self.publisher.publish_once(item.text)
-            if not result.success:
-                raise RuntimeError(result.message or "Publish run failed.")
-        except Exception as exc:
-            artifacts = self._latest_artifacts()
-            failed = running.model_copy(
+            try:
+                result = await self.publisher.publish_once(item.text)
+                if not result.success:
+                    raise RuntimeError(result.message or "Publish run failed.")
+            except Exception as exc:
+                artifacts = self._latest_artifacts()
+                failed = running.model_copy(
+                    update={
+                        "status": "failed",
+                        "finishedAt": self._now(),
+                        "message": str(exc),
+                        "artifacts": artifacts,
+                    }
+                )
+                self._append_run(failed)
+                self.funnel_service.log_event(item, status="publish_failed", run_id=run.id, notes=str(exc))
+                return
+
+            posted_item = self.queue_service.mark_posted(item.id) or item
+            completed = running.model_copy(
                 update={
-                    "status": "failed",
+                    "status": "completed",
                     "finishedAt": self._now(),
-                    "message": str(exc),
-                    "artifacts": artifacts,
+                    "message": result.message or "Publish run completed.",
+                    "artifacts": self._latest_artifacts(),
                 }
             )
-            self._append_run(failed)
-            self.funnel_service.log_event(item, status="publish_failed", run_id=run.id, notes=str(exc))
-            return
-
-        posted_item = self.queue_service.mark_posted(item.id) or item
-        completed = running.model_copy(
-            update={
-                "status": "completed",
-                "finishedAt": self._now(),
-                "message": result.message or "Publish run completed.",
-                "artifacts": self._latest_artifacts(),
-            }
-        )
-        self._append_run(completed)
-        self.funnel_service.log_event(posted_item, status="posted", run_id=run.id)
+            self._append_run(completed)
+            self.funnel_service.log_event(posted_item, status="posted", run_id=run.id)
+        finally:
+            self._release_publish_lock()
 
     def _latest_artifacts(self) -> list[Artifact]:
         return self.artifact_service.list_artifacts(limit=5)
@@ -226,3 +251,44 @@ class RunService:
             if run.id == item.dryRunId and run.queueItemId == item.id:
                 return run.mode == "dry_run" and run.status == "completed"
         return False
+
+    def next_publish_allowed_at(self) -> datetime | None:
+        """Return the UTC time at which a new real publish attempt may start."""
+        attempts = [
+            run.startedAt
+            for run in self._read_runs()
+            if run.mode == "publish"
+            and run.status in {"running", "completed", "failed"}
+            and run.startedAt is not None
+        ]
+        if not attempts:
+            return None
+        return max(attempts) + timedelta(minutes=self.settings.min_post_interval_minutes)
+
+    def _publish_attempt_count(self, queue_item_id: str) -> int:
+        return sum(
+            run.queueItemId == queue_item_id
+            and run.mode == "publish"
+            and run.status in {"running", "completed", "failed"}
+            for run in self._read_runs()
+        )
+
+    def _acquire_publish_lock(self) -> bool:
+        """Atomically reserve the shared data directory for one publish attempt."""
+        self._publish_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(self._publish_lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return False
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(self._now().isoformat())
+        self._owns_publish_lock = True
+        return True
+
+    def _release_publish_lock(self) -> None:
+        if not self._owns_publish_lock:
+            return
+        try:
+            self._publish_lock_path.unlink(missing_ok=True)
+        finally:
+            self._owns_publish_lock = False

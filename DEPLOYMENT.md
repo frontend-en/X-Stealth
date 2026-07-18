@@ -3,7 +3,8 @@
 This project is designed for a Linux host with Docker Engine and the Docker
 Compose plugin. The dashboard is exposed on `FRONTEND_PORT`; Nginx proxies
 `/api/*` to the API container. The API port is bound only to the server's
-loopback interface by default.
+loopback interface by default. Compose also starts a scheduler worker that only
+processes approved queue items whose `scheduledFor` time has passed.
 
 ## First deployment
 
@@ -50,6 +51,13 @@ Alternatively, deploy manually:
    ```
 
 The dashboard will be available at `http://SERVER_IP:${FRONTEND_PORT}`.
+The `bot` service is a persistent scheduler, not a one-shot command. It opens
+Chromium only when `DRY_RUN=false`, `POSTING_ENABLED=true`, a valid `auth.json`
+is present, the item is approved, its dry run is current, and `scheduledFor` is
+due. Set `SCHEDULER_POLL_SECONDS` in `.env.prod` to adjust the polling interval
+(30 seconds by default). `SCHEDULER_MAX_PUBLISH_ATTEMPTS` limits retries per
+queue item (3 by default). Use `make prod-logs` to inspect worker lifecycle and
+failed publish runs.
 For a public deployment, terminate TLS in a reverse proxy in front of the
 dashboard and expose only ports 80/443. Do not expose `API_PORT` publicly.
 

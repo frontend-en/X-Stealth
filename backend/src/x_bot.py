@@ -45,29 +45,56 @@ class XBot:
             )
             return True
 
+        stage = "browser_launch"
         async with async_playwright() as p:
-            browser = await self._launch_browser(p)
             try:
+                browser = await self._launch_browser(p)
+            except Exception as exc:
+                self.log.error(
+                    "Browser launch failed",
+                    stage=stage,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise
+            try:
+                stage = "context_creation"
                 context = await create_stealth_context(browser, self.settings)
                 if self.settings.traces_dir:
                     self.settings.traces_dir.mkdir(parents=True, exist_ok=True)
                     await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
+                stage = "page_creation"
                 page = await context.new_page()
                 try:
+                    stage = "warm_up"
                     await self.warm_up_session(page)
+                    stage = "compose"
                     result = await self.post_tweet(page, text)
                     return result
                 except Exception as exc:
-                    await self._capture_failure(page, exc)
+                    await self._capture_failure(page, exc, stage)
                     raise
                 finally:
                     if self.settings.traces_dir:
                         trace_path = self.settings.traces_dir / f"trace-{self._timestamp()}.zip"
-                        await context.tracing.stop(path=str(trace_path))
-                    await context.close()
+                        try:
+                            await context.tracing.stop(path=str(trace_path))
+                        except Exception as trace_exc:
+                            self.log.warning(
+                                "Could not save Playwright trace",
+                                error_type=type(trace_exc).__name__,
+                                trace=str(trace_path),
+                            )
+                    try:
+                        await context.close()
+                    except Exception as context_exc:
+                        self.log.warning("Could not close browser context", error_type=type(context_exc).__name__)
             finally:
-                await browser.close()
+                try:
+                    await browser.close()
+                except Exception as browser_exc:
+                    self.log.warning("Could not close browser", error_type=type(browser_exc).__name__)
 
     async def warm_up_session(self, page: Page) -> None:
         """Load the home timeline and perform a short, ordinary warm-up."""
@@ -167,14 +194,26 @@ class XBot:
             await self.handle_x_errors(page)
             raise XPostError("Post did not complete within timeout") from exc
 
-    async def _capture_failure(self, page: Page, exc: Exception) -> None:
+    async def _capture_failure(self, page: Page, exc: Exception, stage: str) -> None:
         self.settings.screenshots_dir.mkdir(parents=True, exist_ok=True)
         path = self.settings.screenshots_dir / f"failure-{self._timestamp()}.png"
         try:
             await page.screenshot(path=str(path), full_page=True)
-            self.log.exception("Bot failure captured", screenshot=str(path), error=str(exc))
-        except Exception:
-            self.log.exception("Bot failure; screenshot capture also failed", error=str(exc))
+            self.log.error(
+                "Bot failure captured",
+                stage=stage,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                screenshot=str(path),
+            )
+        except Exception as capture_exc:
+            self.log.error(
+                "Bot failure; screenshot capture also failed",
+                stage=stage,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                capture_error_type=type(capture_exc).__name__,
+            )
 
     def _random_scroll_count(self) -> int:
         import random

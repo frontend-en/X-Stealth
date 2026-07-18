@@ -42,7 +42,7 @@ help:
 	@echo "  make local-logs         Tail local stack logs"
 	@echo "  make local-ps           Show local containers"
 	@echo "  make local-health       Check local API health"
-	@echo "  make local-bot          Run one standalone bot pass with local env"
+	@echo "  make local-bot          Start the local scheduler worker"
 	@echo ""
 	@echo "Production:"
 	@echo "  make prod-config        Render production Compose config"
@@ -107,7 +107,7 @@ local-health:
 	$(LOCAL_COMPOSE) exec -T api python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=10).read().decode())"
 
 local-bot: env-local
-	$(LOCAL_COMPOSE) --profile bot run --rm bot
+	$(LOCAL_COMPOSE) up -d bot
 
 .PHONY: prod-config prod-build prod-up prod-down prod-restart prod-logs prod-ps prod-health prod-bot prod-pull prod-push
 prod-config: require-prod-env
@@ -134,7 +134,7 @@ prod-health: require-prod-env
 	$(PROD_COMPOSE) exec -T api python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=10).read().decode())"
 
 prod-bot: require-prod-env
-	$(PROD_COMPOSE) --profile bot run --rm bot
+	$(PROD_COMPOSE) up -d bot
 
 prod-pull: require-prod-env
 	$(PROD_COMPOSE) pull

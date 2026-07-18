@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     min_action_delay_ms: int = Field(default=300, ge=50, le=5000)
     max_action_delay_ms: int = Field(default=1600, ge=100, le=10000)
     min_post_interval_minutes: int = Field(default=180, ge=1, le=10080)
+    scheduler_poll_seconds: int = Field(default=30, ge=5, le=3600)
+    scheduler_max_publish_attempts: int = Field(default=3, ge=1, le=10)
     warmup_min_scrolls: int = Field(default=2, ge=0, le=20)
     warmup_max_scrolls: int = Field(default=5, ge=0, le=50)
     navigation_timeout_ms: int = Field(default=60000, ge=5000, le=180000)
