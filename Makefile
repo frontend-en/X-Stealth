@@ -15,10 +15,10 @@ PROD_HEALTH_URL ?= http://127.0.0.1:8000/api/v1/health
 LOG_TAIL ?= 200
 
 # Remote VPS deployment settings. Override these on the make command line.
-VPS_HOST ?=
+VPS_HOST ?=31.76.42.159
 VPS_USER ?= root
 VPS_PORT ?= 22
-VPS_PATH ?= /opt/x-stealth-autoposter
+VPS_PATH ?= /root/X-Stealth
 VPS_SSH_KEY ?=
 VPS_TARGET = $(VPS_USER)@$(VPS_HOST)
 VPS_SSH_KEY_ARG = $(if $(VPS_SSH_KEY),-i "$(VPS_SSH_KEY)",)
@@ -154,4 +154,4 @@ prod-first-deploy: require-vps
 	@echo "Uploading application source to $(VPS_TARGET):$(VPS_PATH)"
 	tar -czf - $(DEPLOY_TAR_EXCLUDES) . | $(VPS_SSH) "$(VPS_TARGET)" "mkdir -p '$(VPS_PATH)' && tar -xzf - -C '$(VPS_PATH)'"
 	@echo "Building and starting the production stack on $(VPS_TARGET)"
-	$(VPS_SSH) "$(VPS_TARGET)" "set -eu; cd '$(VPS_PATH)'; test -f .env.prod || cp .env.prod.example .env.prod; mkdir -p backend/data backend/logs backend/screenshots backend/traces; test -f backend/auth.json || { umask 077; : > backend/auth.json; }; make prod-config; make prod-build; make prod-up; make prod-ps; make prod-health"
+	$(VPS_SSH) "$(VPS_TARGET)" "set -eu; cd '$(VPS_PATH)'; test -f .env.prod || cp .env.prod.example .env.prod; mkdir -p backend/data backend/logs backend/screenshots backend/traces; chown -R 999:999 backend/data backend/logs backend/screenshots backend/traces; test -f backend/auth.json || { umask 077; : > backend/auth.json; }; chown 999:999 backend/auth.json; chmod 600 backend/auth.json; make prod-config >/dev/null; make prod-build; make prod-up; make prod-ps; make prod-health"
