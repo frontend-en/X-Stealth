@@ -186,9 +186,13 @@ class QueueService:
         return updated
 
     def _load_items(self) -> list[QueueItem]:
-        loaded = self._load_managed_items()
-        loaded.extend(self._load_legacy_items())
-        return loaded
+        items_by_id = {item.id: item for item in self._load_legacy_items()}
+        items_by_id.update({item.id: item for item in self._load_managed_items()})
+        return sorted(
+            items_by_id.values(),
+            key=lambda item: item.createdAt or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
 
     def _load_managed_items(self) -> list[QueueItem]:
         if self.queue_path is None or not self.queue_path.exists():

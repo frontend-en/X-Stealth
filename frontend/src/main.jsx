@@ -14,7 +14,6 @@ import {
 } from "recharts";
 import {
   AlertTriangle,
-  Archive,
   BarChart3,
   CalendarClock,
   Check,
@@ -22,7 +21,6 @@ import {
   Clock3,
   FileText,
   Gauge,
-  Layers3,
   Play,
   RefreshCw,
   Search,
@@ -34,8 +32,6 @@ import {
 } from "lucide-react";
 import {
   approveQueueItem,
-  API_BASE_URL,
-  getArtifacts,
   getQueue,
   getRuns,
   getSettings,
@@ -67,11 +63,6 @@ Object.assign(statusLabels, {
   rejected: "Rejected"
 });
 
-const modeLabels = {
-  dry_run: "Пробный запуск",
-  publish: "Публикация"
-};
-
 const riskLabels = {
   low: "низкий",
   medium: "средний",
@@ -96,20 +87,6 @@ const ctaLabels = {
   none: "None"
 };
 
-const artifactTypeLabels = {
-  log: "лог",
-  screenshot: "скриншот",
-  trace: "трейс"
-};
-
-const knownRunMessages = {
-  "Dry run completed. Publishing was skipped.": "Пробный запуск завершен. Публикация пропущена.",
-  "Queue item was not found.": "Пост в очереди не найден.",
-  "Publish run queued.": "Запуск публикации поставлен в очередь.",
-  "Publish run started.": "Публикация началась.",
-  "Publish run completed.": "Публикация завершена."
-};
-
 const queueColors = {
   queued: "#2563eb",
   blocked: "#dc2626",
@@ -130,8 +107,40 @@ function formatNumber(value) {
   return new Intl.NumberFormat("ru-RU").format(value);
 }
 
-function translateRunMessage(message) {
-  return knownRunMessages[message] || message || "Без сообщения";
+function formatRemainingTime(milliseconds) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = [];
+
+  if (hours) parts.push(`${hours} ч`);
+  if (minutes || hours) parts.push(`${minutes} мин`);
+  parts.push(`${seconds} с`);
+  return parts.join(" ");
+}
+
+function publishTiming(settings, now) {
+  const intervalMinutes = settings?.minPostIntervalMinutes;
+  const allowedAt = settings?.nextPublishAllowedAt ? Date.parse(settings.nextPublishAllowedAt) : NaN;
+
+  if (!intervalMinutes || Number.isNaN(allowedAt)) {
+    return { available: true, progress: 100, message: "Доступна сейчас", detail: "Предыдущих попыток публикации нет." };
+  }
+
+  const intervalMs = intervalMinutes * 60 * 1000;
+  const remainingMs = Math.max(0, allowedAt - now);
+  const progress = Math.min(100, Math.max(0, ((now - (allowedAt - intervalMs)) / intervalMs) * 100));
+  const availableAt = new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(allowedAt));
+
+  return remainingMs > 0
+    ? { available: false, progress, message: `Осталось ${formatRemainingTime(remainingMs)}`, detail: `Доступна ${availableAt}` }
+    : { available: true, progress: 100, message: "Доступна сейчас", detail: `Интервал завершился ${availableAt}` };
 }
 
 function statusTone(status) {
@@ -158,6 +167,117 @@ function MetricCard({ icon: Icon, label, value, trend, tone }) {
         <span>{trend}</span>
       </div>
     </section>
+  );
+}
+
+function QueueItemActions({ item, runningAction, settings, onDryRun, onQueueAction, onPublish }) {
+  return (
+    <div className="queue-item-actions">
+      <button
+        type="button"
+        className="row-button"
+        disabled={runningAction === `dry-${item.id}` || item.status === "rejected" || item.status === "skipped"}
+        onClick={() => onDryRun(item.id)}
+      >
+        <Play size={15} aria-hidden="true" />
+        Dry-run
+      </button>
+      <div className="row-actions">
+        <button
+          type="button"
+          className="row-button success"
+          aria-label="Approve after dry-run"
+          disabled={runningAction === `approve-${item.id}` || item.status !== "dry_run_passed"}
+          onClick={() => onQueueAction(item.id, "approve")}
+          title="Approve after dry-run"
+        >
+          <Check size={15} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="row-button"
+          aria-label="Skip post"
+          disabled={runningAction === `skip-${item.id}` || item.status === "posted"}
+          onClick={() => onQueueAction(item.id, "skip")}
+          title="Skip"
+        >
+          Skip
+        </button>
+        <button
+          type="button"
+          className="row-button warning"
+          aria-label="Reject post"
+          disabled={runningAction === `reject-${item.id}` || item.status === "posted"}
+          onClick={() => onQueueAction(item.id, "reject")}
+          title="Reject"
+        >
+          <XCircle size={15} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="row-button publish"
+          aria-label="Publish approved post"
+          disabled={runningAction === `publish-${item.id}` || item.status !== "approved" || settings?.dryRun || !settings?.postingEnabled}
+          onClick={() => onPublish(item.id)}
+          title="Publish approved post"
+        >
+          <Send size={15} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function QueueCard({ item, runningAction, settings, onDryRun, onQueueAction, onPublish }) {
+  const riskTone = item.risk === "low" ? "low" : "medium";
+
+  return (
+    <article className="queue-card">
+      <div className="queue-card-header">
+        <div className="queue-card-tags">
+          <span>{pillarLabels[item.pillar] || item.pillar || "Без рубрики"}</span>
+          <span>#{item.id}</span>
+        </div>
+        <StatusBadge status={item.status} />
+      </div>
+      <p className="queue-card-copy">{item.text}</p>
+      <div className="queue-card-meta">
+        <div>
+          <span>Риск</span>
+          <strong className={`risk ${riskTone}`}>
+            {item.risk === "low" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+            {riskLabels[item.risk] || item.risk}
+          </strong>
+        </div>
+        <div>
+          <span>CTA</span>
+          <strong>{ctaLabels[item.ctaType] || item.ctaType || "—"}</strong>
+        </div>
+        <div>
+          <span>Качество</span>
+          <strong>{item.qualityScore ?? "—"}</strong>
+        </div>
+        <div>
+          <span>Длина</span>
+          <strong>{item.textLength ?? "—"}</strong>
+        </div>
+      </div>
+      <details className="queue-card-details">
+        <summary>Детали поста</summary>
+        <dl>
+          <div><dt>Источник</dt><dd>{item.source || "—"}</dd></div>
+          <div><dt>UTM</dt><dd>{item.utmUrl ? <a className="utm-link" href={item.utmUrl} target="_blank" rel="noreferrer">Открыть ссылку</a> : "—"}</dd></div>
+        </dl>
+      </details>
+      <QueueItemActions
+        item={item}
+        runningAction={runningAction}
+        settings={settings}
+        onDryRun={onDryRun}
+        onQueueAction={onQueueAction}
+        onPublish={onPublish}
+      />
+    </article>
   );
 }
 
@@ -190,7 +310,6 @@ function App() {
   const [settings, setSettings] = useState(null);
   const [queue, setQueue] = useState([]);
   const [runs, setRuns] = useState([]);
-  const [artifacts, setArtifacts] = useState([]);
   const [health, setHealth] = useState(null);
   const [query, setQuery] = useState("");
   const [pillarFilter, setPillarFilter] = useState("all");
@@ -199,22 +318,21 @@ function App() {
   const [runningAction, setRunningAction] = useState("");
   const [view, setView] = useState("dashboard");
   const [pendingSection, setPendingSection] = useState("");
+  const [now, setNow] = useState(() => Date.now());
 
   const refresh = useCallback(async () => {
     setError("");
-    const [healthData, settingsData, queueData, runsData, artifactsData] = await Promise.all([
+    const [healthData, settingsData, queueData, runsData] = await Promise.all([
       getHealth(),
       getSettings(),
       getQueue(),
-      getRuns(),
-      getArtifacts()
+      getRuns()
     ]);
 
     setHealth(healthData);
     setSettings(settingsData);
     setQueue(queueData.items || []);
     setRuns(runsData.items || []);
-    setArtifacts(artifactsData.items || []);
   }, []);
 
   useEffect(() => {
@@ -228,6 +346,11 @@ function App() {
     document.getElementById(pendingSection)?.scrollIntoView({ behavior: "smooth", block: "start" });
     setPendingSection("");
   }, [view, pendingSection]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   function showDashboardSection(section) {
     window.history.replaceState(null, "", `#${section}`);
@@ -249,6 +372,7 @@ function App() {
   const blockedCount = queue.filter((item) => item.status === "blocked").length;
   const approvedCount = queue.filter((item) => item.status === "approved").length;
   const latestRun = runs[0];
+  const nextPublishTiming = publishTiming(settings, now);
 
   async function handleDryRun(itemId) {
     setRunningAction(`dry-${itemId}`);
@@ -308,25 +432,17 @@ function App() {
         </div>
 
         <nav>
-          <button type="button" className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>
+          <button type="button" aria-label="Обзор" className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>
             <BarChart3 size={18} aria-hidden="true" />
             Обзор
           </button>
-          <button type="button" className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}>
+          <button type="button" aria-label="AI Studio" className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}>
             <Sparkles size={18} aria-hidden="true" />
             AI Studio
           </button>
-          <button type="button" onClick={() => showDashboardSection("queue")}>
+          <button type="button" aria-label="Очередь" onClick={() => showDashboardSection("queue")}>
             <CalendarClock size={18} aria-hidden="true" />
             Очередь
-          </button>
-          <button type="button" onClick={() => showDashboardSection("runs")}>
-            <TerminalSquare size={18} aria-hidden="true" />
-            Запуски
-          </button>
-          <button type="button" onClick={() => showDashboardSection("artifacts")}>
-            <Archive size={18} aria-hidden="true" />
-            Артефакты
           </button>
         </nav>
       </aside>
@@ -405,13 +521,6 @@ function App() {
             trend={latestRun ? `Последний: ${statusLabels[latestRun.status] || latestRun.status}` : "Запусков пока нет"}
             tone="amber"
           />
-          <MetricCard
-            icon={Archive}
-            label="Артефакты"
-            value={formatNumber(artifacts.length)}
-            trend={health ? `API: ${health.status === "ok" ? "работает" : health.status}` : "API не загружен"}
-            tone="rose"
-          />
         </section>
 
         <section className="dashboard-grid">
@@ -486,6 +595,14 @@ function App() {
               <span>Без окна браузера: <strong>{settings?.headless ? "включено" : "выключено"}</strong></span>
               <span>Прокси: <strong>{settings?.hasProxyConfigured ? "настроен" : "не настроен"}</strong></span>
               <span>Мин. интервал: <strong>{settings?.minPostIntervalMinutes ?? "-"} мин</strong></span>
+              <div className="publish-timing" aria-live="polite">
+                <div className="publish-timing-header">
+                  <span>Следующая публикация</span>
+                  <strong className={nextPublishTiming.available ? "available" : "waiting"}>{nextPublishTiming.message}</strong>
+                </div>
+                <div className="publish-progress" aria-hidden="true"><span style={{ width: `${nextPublishTiming.progress}%` }} /></div>
+                <small>{nextPublishTiming.detail}</small>
+              </div>
             </div>
           </article>
         </section>
@@ -524,87 +641,48 @@ function App() {
               <tbody>
                 {filteredQueue.map((item) => (
                   <tr key={item.id}>
-                    <td>{item.id}</td>
-                    <td>{pillarLabels[item.pillar] || item.pillar || "-"}</td>
-                    <td>{ctaLabels[item.ctaType] || item.ctaType || "-"}</td>
-                    <td>{item.qualityScore ?? "-"}</td>
-                    <td>
+                    <td data-label="ID">{item.id}</td>
+                    <td data-label="Рубрика">{pillarLabels[item.pillar] || item.pillar || "-"}</td>
+                    <td data-label="CTA">{ctaLabels[item.ctaType] || item.ctaType || "-"}</td>
+                    <td data-label="Качество">{item.qualityScore ?? "-"}</td>
+                    <td data-label="UTM">
                       {item.utmUrl ? (
                         <a className="utm-link" href={item.utmUrl} target="_blank" rel="noreferrer">Preview</a>
                       ) : (
                         "-"
                       )}
                     </td>
-                    <td>
+                    <td data-label="Текст" data-field="content">
                       <div className="post-title">
                         <strong>{item.text}</strong>
                       </div>
                     </td>
-                    <td>
+                    <td data-label="Статус">
                       <StatusBadge status={item.status} />
                     </td>
-                    <td>{item.textLength}</td>
-                    <td>
+                    <td data-label="Длина">{item.textLength}</td>
+                    <td data-label="Риск">
                       <span className={`risk ${item.risk === "low" ? "low" : "medium"}`}>
                         {item.risk === "low" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
                         {riskLabels[item.risk] || item.risk}
                       </span>
                     </td>
-                    <td>{item.source}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="row-button"
-                        disabled={runningAction === `dry-${item.id}` || item.status === "rejected" || item.status === "skipped"}
-                        onClick={() => handleDryRun(item.id)}
-                      >
-                        <Play size={15} aria-hidden="true" />
-                        Dry-run
-                      </button>
-                      <div className="row-actions">
-                        <button
-                          type="button"
-                          className="row-button success"
-                          disabled={runningAction === `approve-${item.id}` || item.status !== "dry_run_passed"}
-                          onClick={() => handleQueueAction(item.id, "approve")}
-                          title="Approve after dry-run"
-                        >
-                          <Check size={15} aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          className="row-button"
-                          disabled={runningAction === `skip-${item.id}` || item.status === "posted"}
-                          onClick={() => handleQueueAction(item.id, "skip")}
-                          title="Skip"
-                        >
-                          Skip
-                        </button>
-                        <button
-                          type="button"
-                          className="row-button warning"
-                          disabled={runningAction === `reject-${item.id}` || item.status === "posted"}
-                          onClick={() => handleQueueAction(item.id, "reject")}
-                          title="Reject"
-                        >
-                          <XCircle size={15} aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          className="row-button publish"
-                          disabled={runningAction === `publish-${item.id}` || item.status !== "approved" || settings?.dryRun || !settings?.postingEnabled}
-                          onClick={() => handlePublish(item.id)}
-                          title="Publish approved post"
-                        >
-                          <Send size={15} aria-hidden="true" />
-                        </button>
-                      </div>
+                    <td data-label="Источник">{item.source}</td>
+                    <td data-label="Действия" data-field="actions">
+                      <QueueItemActions
+                        item={item}
+                        runningAction={runningAction}
+                        settings={settings}
+                        onDryRun={handleDryRun}
+                        onQueueAction={handleQueueAction}
+                        onPublish={handlePublish}
+                      />
                     </td>
                   </tr>
                 ))}
                 {!filteredQueue.length ? (
                   <tr>
-                    <td colSpan="7">
+                    <td colSpan="11">
                       <div className="empty-state">По текущему фильтру постов нет.</div>
                     </td>
                   </tr>
@@ -612,50 +690,22 @@ function App() {
               </tbody>
             </table>
           </div>
-        </section>
-
-        <section className="insights-row" id="runs">
-          {runs.slice(0, 3).map((run) => (
-            <article className="insight" key={run.id}>
-              <Layers3 size={20} aria-hidden="true" />
-              <div>
-                <strong>{run.id}</strong>
-                <span>
-                  {modeLabels[run.mode] || run.mode} / {statusLabels[run.status] || run.status}:{" "}
-                  {translateRunMessage(run.message)}
-                </span>
-              </div>
-            </article>
-          ))}
-          {!runs.length ? (
-            <article className="insight">
-              <Layers3 size={20} aria-hidden="true" />
-              <div>
-                <strong>Запусков пока нет</strong>
-                <span>Результаты пробного запуска появятся здесь после первого действия в очереди.</span>
-              </div>
-            </article>
-          ) : null}
-        </section>
-
-        <section className="panel table-panel" id="artifacts">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Артефакты</p>
-              <h2>Безопасный индекс runtime-артефактов</h2>
-            </div>
-          </div>
-          <div className="artifact-list">
-            {artifacts.slice(0, 8).map((artifact) => (
-              <a key={artifact.id} href={`${API_BASE_URL}${artifact.downloadUrl}`}>
-                <FileText size={16} aria-hidden="true" />
-                <span>{artifact.name}</span>
-                <small>{artifactTypeLabels[artifact.type] || artifact.type} / {formatNumber(artifact.sizeBytes)} байт</small>
-              </a>
+          <div className="queue-cards" aria-label="Посты в очереди">
+            {filteredQueue.map((item) => (
+              <QueueCard
+                key={item.id}
+                item={item}
+                runningAction={runningAction}
+                settings={settings}
+                onDryRun={handleDryRun}
+                onQueueAction={handleQueueAction}
+                onPublish={handlePublish}
+              />
             ))}
-            {!artifacts.length ? <div className="empty-state">Артефактов пока нет.</div> : null}
+            {!filteredQueue.length ? <div className="empty-state">По текущему фильтру постов нет.</div> : null}
           </div>
         </section>
+
       </section>
       )}
     </main>

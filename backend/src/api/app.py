@@ -132,8 +132,14 @@ def health() -> HealthResponse:
 
 
 @app.get("/api/v1/settings")
-def settings(settings_obj: Annotated[Settings, Depends(get_settings)]):
-    return get_public_settings(settings_obj)
+def settings(
+    settings_obj: Annotated[Settings, Depends(get_settings)],
+    run_service: Annotated[RunService, Depends(get_run_service)],
+):
+    return get_public_settings(
+        settings_obj,
+        next_publish_allowed_at=run_service.next_publish_allowed_at(),
+    )
 
 
 @app.get("/api/v1/queue", response_model=QueueListResponse)

@@ -49,6 +49,7 @@ class PublicSettingsResponse(BaseModel):
     screenshotsDir: str
     tracesDir: str
     minPostIntervalMinutes: int
+    nextPublishAllowedAt: datetime | None = None
     warmupScrollRange: WarmupScrollRange
     hasAuthState: bool
     hasProxyConfigured: bool
