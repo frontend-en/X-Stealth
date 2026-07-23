@@ -18,15 +18,13 @@ from .services.run_service import RunService
 class SchedulerWorker:
     """Poll the managed queue without bypassing publishing safeguards."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, store: PostgresStore | None = None) -> None:
         self.settings = settings
-        self.store = PostgresStore(settings.database_url)
-        self.store.ensure_schema()
-        self.queue_service = QueueService(settings.data_path, settings.agent_queue_path, self.store)
-        self.queue_service.migrate_legacy_files()
+        self.store = store
+        if self.store is not None:
+            self.store.ensure_schema()
+        self.queue_service = QueueService(self.store)
         self.run_service = RunService(settings, self.queue_service, ArtifactService(settings), store=self.store)
-        self.run_service.migrate_legacy_file()
-        self.run_service.funnel_service.migrate_legacy_file()
         self.log = logger.bind(component="scheduler")
 
     async def run_forever(self) -> None:
@@ -79,9 +77,10 @@ class SchedulerWorker:
 async def async_main() -> int:
     settings = load_settings()
     setup_logging(settings.log_level, settings.logs_dir)
-    for directory in (settings.logs_dir, settings.screenshots_dir, settings.traces_dir, settings.data_path.parent):
+    for directory in (settings.logs_dir, settings.screenshots_dir, settings.traces_dir):
         directory.mkdir(parents=True, exist_ok=True)
-    await SchedulerWorker(settings).run_forever()
+    store = PostgresStore(settings.database_url)
+    await SchedulerWorker(settings, store).run_forever()
     return 0
 
 

@@ -59,7 +59,7 @@ class AgentHarness:
             canDryRun=self.settings.agent_enabled,
             canPublish=can_publish,
             publishBlockedReason=None if can_publish else reason or "Agent harness is disabled.",
-            queueStorage="postgresql" if self.queue_service.store is not None else "jsonl",
+            queueStorage="postgresql",
             requiresHumanApprovalForPublish=self.settings.agent_publish_requires_approval,
         )
 
@@ -134,11 +134,6 @@ class AgentHarness:
             target_url=request.targetUrl,
             utm_campaign=request.utmCampaign,
             utm_content=request.utmContent,
-            metadata={
-                "createdBy": "agent",
-                "sourcePrompt": request.sourcePrompt,
-                "reviewRequired": request.reviewRequired,
-            },
         )
         self.events.write(
             "draft_created",

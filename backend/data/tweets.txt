@@ -1,3 +1,0 @@
-# One post per block. Separate multi-line posts with a line containing only ---.
-# The app runs in DRY_RUN=true by default.
-Hello from the X autoposter dry run.

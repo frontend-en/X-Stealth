@@ -36,6 +36,7 @@ help:
 	@echo ""
 	@echo "Local:"
 	@echo "  make local-build        Build local Docker images"
+	@echo "  make local-rebuild      Rebuild project images without cache and start the full local stack"
 	@echo "  make local-up           Start local PostgreSQL, API, dashboard, and scheduler"
 	@echo "  make local-down         Stop local stack"
 	@echo "  make local-restart      Restart local stack"
@@ -48,6 +49,7 @@ help:
 	@echo "Production:"
 	@echo "  make prod-config        Render production Compose config"
 	@echo "  make prod-build         Build production-tagged Docker images"
+	@echo "  make prod-rebuild       Rebuild production images without cache and recreate the full stack"
 	@echo "  make prod-up            Start production stack"
 	@echo "  make prod-down          Stop production stack"
 	@echo "  make prod-restart       Restart production stack"
@@ -87,12 +89,20 @@ local-config: env-local
 
 verify: backend-compile frontend-build local-config
 
-.PHONY: local-build local-up local-down local-restart local-logs local-ps local-health local-bot local-db-shell
+.PHONY: local-build local-rebuild local-up local-down local-restart local-logs local-ps local-health local-bot local-db-shell
 local-build: env-local
 	$(LOCAL_COMPOSE) build
 
+# Removes only images used by this Compose project. The postgres_data volume is
+# intentionally retained so a rebuild never discards local application data.
+local-rebuild: env-local
+	$(LOCAL_COMPOSE) down --remove-orphans --rmi all
+	$(LOCAL_COMPOSE) pull postgres
+	$(LOCAL_COMPOSE) build --no-cache --pull
+	$(LOCAL_COMPOSE) up -d --force-recreate --pull never
+
 local-up: env-local
-	$(LOCAL_COMPOSE) up -d
+	$(LOCAL_COMPOSE) up -d --pull never
 
 local-down: env-local
 	$(LOCAL_COMPOSE) down
@@ -114,12 +124,20 @@ local-bot: env-local
 local-db-shell: env-local
 	$(LOCAL_COMPOSE) exec postgres psql -U $${POSTGRES_USER:-x_autoposter} -d $${POSTGRES_DB:-x_autoposter}
 
-.PHONY: prod-config prod-build prod-up prod-down prod-restart prod-logs prod-ps prod-health prod-bot prod-pull prod-push prod-db-shell
+.PHONY: prod-config prod-build prod-rebuild prod-up prod-down prod-restart prod-logs prod-ps prod-health prod-bot prod-pull prod-push prod-db-shell
 prod-config: require-prod-env
 	$(PROD_COMPOSE) config
 
 prod-build: require-prod-env
 	$(PROD_COMPOSE) build
+
+# Removes only images used by this Compose project. The postgres_data volume is
+# intentionally retained so a production rebuild never discards application data.
+prod-rebuild: require-prod-env
+	$(PROD_COMPOSE) down --remove-orphans --rmi all
+	$(PROD_COMPOSE) pull postgres
+	$(PROD_COMPOSE) build --no-cache --pull
+	$(PROD_COMPOSE) up -d --force-recreate
 
 prod-up: require-prod-env
 	$(PROD_COMPOSE) up -d

@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 from datetime import timedelta
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 
 from src.api.schemas import Artifact, RunDetail, RunRecord, RunStatus
 from src.config import Settings
@@ -29,19 +25,17 @@ class RunService:
         settings: Settings,
         queue_service: QueueService,
         artifact_service: ArtifactService,
+        store: PostgresStore,
         publisher: Publisher | None = None,
-        store: PostgresStore | None = None,
     ) -> None:
         self.settings = settings
         self.queue_service = queue_service
         self.artifact_service = artifact_service
         self.publisher = publisher or XPublisher(settings)
         self.store = store
-        self.runs_path = settings.data_path.parent / "runs.jsonl"
         self.quality_service = QualityService()
-        self.funnel_service = FunnelService(settings.data_path.parent, store)
+        self.funnel_service = FunnelService(store)
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._publish_lock_path = settings.data_path.parent / "active-publish.lock"
         self._owns_publish_lock = False
 
     def list_runs(self, limit: int = 50) -> list[RunRecord]:
@@ -222,29 +216,10 @@ class RunService:
         return self.artifact_service.list_artifacts(limit=5)
 
     def _read_runs(self) -> list[RunRecord]:
-        if self.store is not None:
-            return [RunRecord.model_validate(row) for row in self.store.runs()]
-        latest: dict[str, RunRecord] = {}
-        if not self.runs_path.exists():
-            return []
-        for line in self.runs_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                raw: dict[str, Any] = json.loads(line)
-                run = RunRecord.model_validate(raw)
-                latest[run.id] = run
-            except (json.JSONDecodeError, ValueError):
-                continue
-        return list(latest.values())
+        return [RunRecord.model_validate(row) for row in self.store.runs()]
 
     def _append_run(self, run: RunRecord) -> None:
-        if self.store is not None:
-            self.store.upsert_run(run.model_dump(mode="json"))
-            return
-        self.runs_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.runs_path.open("a", encoding="utf-8") as handle:
-            handle.write(run.model_dump_json() + "\n")
+        self.store.upsert_run(run.model_dump(mode="json"))
 
     @staticmethod
     def _now() -> datetime:
@@ -284,46 +259,13 @@ class RunService:
         )
 
     def _acquire_publish_lock(self) -> bool:
-        """Atomically reserve the shared data directory for one publish attempt."""
-        if self.store is not None:
-            claimed = self.store.claim_publish_lock()
-            self._owns_publish_lock = claimed
-            return claimed
-        self._publish_lock_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            descriptor = os.open(self._publish_lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            return False
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(self._now().isoformat())
-        self._owns_publish_lock = True
-        return True
+        """Atomically reserve PostgreSQL for one publish attempt."""
+        claimed = self.store.claim_publish_lock()
+        self._owns_publish_lock = claimed
+        return claimed
 
     def _release_publish_lock(self) -> None:
         if not self._owns_publish_lock:
             return
-        if self.store is not None:
-            self.store.release_publish_lock()
-            self._owns_publish_lock = False
-            return
-        try:
-            self._publish_lock_path.unlink(missing_ok=True)
-        finally:
-            self._owns_publish_lock = False
-
-    def migrate_legacy_file(self) -> None:
-        if self.store is None:
-            return
-
-        def import_runs(raw: str) -> None:
-            latest: dict[str, RunRecord] = {}
-            for line in raw.splitlines():
-                try:
-                    item = RunRecord.model_validate(json.loads(line))
-                    latest[item.id] = item
-                except (json.JSONDecodeError, ValueError):
-                    continue
-            for item in latest.values():
-                self.store.upsert_run(item.model_dump(mode="json"))
-
-        self.store.import_once(self.runs_path, import_runs)
+        self.store.release_publish_lock()
+        self._owns_publish_lock = False

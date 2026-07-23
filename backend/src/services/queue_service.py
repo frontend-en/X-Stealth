@@ -1,16 +1,13 @@
-"""Queue service backed by the configured tweet text file."""
+"""PostgreSQL-backed queue service."""
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from src.api.schemas import CtaType, PostPillar, QueueItem, QueueItemRisk, QueueItemStatus, ValidationResult
 from src.database import PostgresStore
-from src.tweet_source import FileTweetSource
 
 
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -49,22 +46,18 @@ def risk_for_validation(validation: ValidationResult) -> QueueItemRisk:
 
 
 class QueueService:
-    """Read queue items from the configured source."""
+    """Manage queue items persisted in PostgreSQL."""
 
-    def __init__(self, data_path: Path, queue_path: Path | None = None, store: PostgresStore | None = None) -> None:
-        self.data_path = data_path
-        self.queue_path = queue_path
+    def __init__(self, store: PostgresStore) -> None:
         self.store = store
 
     def list_items(self, limit: int = 50, offset: int = 0) -> tuple[list[QueueItem], int]:
-        items = self._load_items()
-        return items[offset : offset + limit], len(items)
+        rows, total = self.store.queue_items(limit=limit, offset=offset)
+        return [QueueItem.model_validate(row) for row in rows], total
 
     def get_item(self, item_id: str) -> QueueItem | None:
-        for item in self._load_items():
-            if item.id == item_id:
-                return item
-        return None
+        row = self.store.queue_item(item_id)
+        return QueueItem.model_validate(row) if row else None
 
     def get_text(self, item_id: str) -> str | None:
         item = self.get_item(item_id)
@@ -82,11 +75,8 @@ class QueueService:
         utm_campaign: str | None = None,
         utm_content: str | None = None,
         notes: str = "",
-        metadata: dict[str, Any] | None = None,
     ) -> QueueItem:
-        """Create a writable queue item in the managed JSONL queue."""
-        if self.queue_path is None and self.store is None:
-            raise RuntimeError("Writable queue storage is not configured.")
+        """Create a queue item in PostgreSQL."""
 
         now = self._now()
         validation = validate_post_text(text)
@@ -108,7 +98,7 @@ class QueueService:
             updatedAt=now,
             scheduledFor=scheduled_for,
         )
-        self._append_item(item, metadata=metadata, validation=validation)
+        self._append_item(item)
         return item
 
     def update_item(
@@ -150,7 +140,7 @@ class QueueService:
                 "qualityScore": None,
             }
         )
-        self._append_item(updated, validation=validation)
+        self._append_item(updated)
         return updated
 
     def mark_dry_run_passed(self, item_id: str, *, run_id: str, quality_score: int, utm_url: str | None) -> QueueItem | None:
@@ -187,118 +177,19 @@ class QueueService:
         self._append_item(updated)
         return updated
 
-    def _load_items(self) -> list[QueueItem]:
-        if self.store is not None:
-            rows, _ = self.store.queue_items(limit=10000)
-            return [QueueItem.model_validate(row) for row in rows]
-        items_by_id = {item.id: item for item in self._load_legacy_items()}
-        items_by_id.update({item.id: item for item in self._load_managed_items()})
-        return sorted(
-            items_by_id.values(),
-            key=lambda item: item.createdAt or datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-
-    def _load_managed_items(self) -> list[QueueItem]:
-        if self.store is not None:
-            return self._load_items()
-        if self.queue_path is None or not self.queue_path.exists():
-            return []
-
-        latest: dict[str, QueueItem] = {}
-        for line in self.queue_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                raw: dict[str, Any] = json.loads(line)
-                latest[raw["id"]] = QueueItem.model_validate(raw)
-            except (KeyError, json.JSONDecodeError, ValueError):
-                continue
-        return sorted(
-            latest.values(),
-            key=lambda item: item.createdAt or datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-
-    def _load_legacy_items(self) -> list[QueueItem]:
-        source = FileTweetSource(self.data_path)
-        loaded: list[QueueItem] = []
-        index = 1
-
-        while True:
-            text = source.next_tweet()
-            if text is None:
-                break
-            validation = validate_post_text(text)
-            loaded.append(
-                QueueItem(
-                    id=f"tweet-{index:04d}",
-                    text=text,
-                    textLength=validation.textLength,
-                    status="queued" if validation.valid else "blocked",
-                    risk=risk_for_validation(validation),
-                    source=self.data_path.as_posix(),
-                    createdAt=None,
-                    updatedAt=None,
-                    scheduledFor=None,
-                )
-            )
-            index += 1
-
-        return loaded
-
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
 
     def _make_item_id(self, now: datetime) -> str:
-        existing_count = len(self._load_managed_items()) + 1
+        existing_count = self.store.count("queue_items") + 1
         return f"queue-{now.strftime('%Y%m%d-%H%M%S-%f')}-{existing_count:06d}"
 
     def _append_item(
         self,
         item: QueueItem,
-        *,
-        metadata: dict[str, Any] | None = None,
-        validation: ValidationResult | None = None,
     ) -> None:
-        if self.store is not None:
-            self.store.upsert_queue_item(item.model_dump(mode="json"))
-            return
-        if self.queue_path is None:
-            raise RuntimeError("Writable queue storage is not configured.")
-        record = item.model_dump(mode="json")
-        if validation is not None:
-            record["validation"] = validation.model_dump(mode="json")
-        if metadata is not None:
-            record["metadata"] = metadata
-        self.queue_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.queue_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    def migrate_legacy_files(self) -> None:
-        """Import the pre-PostgreSQL tweet queue exactly once per file revision."""
-        if self.store is None:
-            return
-
-        def import_tweets(_: str) -> None:
-            for item in self._load_legacy_items():
-                self.store.upsert_queue_item(item.model_dump(mode="json"))
-
-        def import_queue(raw: str) -> None:
-            latest: dict[str, QueueItem] = {}
-            for line in raw.splitlines():
-                try:
-                    item = QueueItem.model_validate(json.loads(line))
-                    latest[item.id] = item
-                except (json.JSONDecodeError, ValueError):
-                    continue
-            for item in latest.values():
-                self.store.upsert_queue_item(item.model_dump(mode="json"))
-
-        self.store.import_once(self.data_path, import_tweets)
-        if self.queue_path is not None:
-            self.store.import_once(self.queue_path, import_queue)
+        self.store.upsert_queue_item(item.model_dump(mode="json"))
 
     @staticmethod
     def _normalize_text(text: str) -> str:

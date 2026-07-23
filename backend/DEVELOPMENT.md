@@ -10,6 +10,17 @@ playwright install chromium
 cp ../.env.example ../.env
 ```
 
+Start PostgreSQL before running the backend directly:
+
+```bash
+cd ..
+make local-up
+```
+
+For direct backend commands, use `DATABASE_URL` from `.env.example` (which
+points to the loopback PostgreSQL port). Docker services instead use
+`DOCKER_DATABASE_URL` and the internal `postgres` hostname.
+
 On Windows PowerShell:
 
 ```powershell
@@ -62,12 +73,16 @@ make local-build
 make local-up
 ```
 
-The compose file starts the API and dashboard, reads the root `.env` when it
+The compose file starts PostgreSQL, the API, dashboard, and scheduler, reads the root `.env` when it
 exists, and mounts `backend/data/`, `backend/logs/`, `backend/screenshots/`,
 `backend/traces/`, and `backend/auth.json`. Logs are written to stdout,
 `backend/logs/bot.log`, and `backend/logs/error.log`.
 
-To run the standalone bot entry point instead of using the dashboard API:
+Runtime state is stored exclusively in PostgreSQL. The application does not
+read, write, or import JSONL/TXT state files.
+
+The scheduler starts automatically with `make local-up`; to ensure it is
+running after a targeted restart:
 
 ```bash
 make local-bot

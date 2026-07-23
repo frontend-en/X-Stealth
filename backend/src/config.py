@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     dry_run: bool = True
     posting_enabled: bool = False
-    database_url: str = "postgresql://x_autoposter:x_autoposter@localhost:5432/x_autoposter"
+    database_url: str = "postgresql://x_autoposter:x_autoposter@localhost:55432/x_autoposter"
 
     x_base_url: str = "https://x.com"
     headless: bool = True
@@ -37,7 +37,6 @@ class Settings(BaseSettings):
     viewport_height: int = Field(default=768, ge=600, le=1600)
 
     auth_state_path: Path = Path("auth.json")
-    data_path: Path = Path("data/tweets.txt")
     logs_dir: Path = Path("logs")
     screenshots_dir: Path = Path("screenshots")
     traces_dir: Path = Path("traces")
@@ -55,16 +54,11 @@ class Settings(BaseSettings):
     proxy_url: str | None = None
 
     agent_enabled: bool = True
-    agent_queue_path: Path = Path("data/queue.jsonl")
-    agent_events_path: Path = Path("data/agent_events.jsonl")
     agent_publish_requires_approval: bool = True
     agent_require_successful_dry_run_before_publish: bool = True
 
     openai_api_key: str | None = None
     openai_model: str | None = None
-    pipeline_conversations_path: Path = Path("data/conversations.jsonl")
-    pipeline_messages_path: Path = Path("data/chat_messages.jsonl")
-    pipeline_runs_path: Path = Path("data/pipeline_runs.jsonl")
 
     @field_validator("max_action_delay_ms")
     @classmethod

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bar,
@@ -22,6 +22,7 @@ import {
   FileText,
   Gauge,
   LogOut,
+  LoaderCircle,
   Play,
   RefreshCw,
   Search,
@@ -176,6 +177,8 @@ function MetricCard({ icon: Icon, label, value, trend, tone }) {
 }
 
 function QueueItemActions({ item, runningAction, settings, onDryRun, onQueueAction, onPublish }) {
+  const isPublishing = runningAction === `publish-${item.id}`;
+
   return (
     <div className="queue-item-actions">
       <button
@@ -221,12 +224,13 @@ function QueueItemActions({ item, runningAction, settings, onDryRun, onQueueActi
         <button
           type="button"
           className="row-button publish"
-          aria-label="Publish approved post"
-          disabled={runningAction === `publish-${item.id}` || item.status !== "approved" || settings?.dryRun || !settings?.postingEnabled}
+          aria-label={isPublishing ? "Publishing post" : "Publish approved post"}
+          aria-busy={isPublishing}
+          disabled={isPublishing || item.status !== "approved" || settings?.dryRun || !settings?.postingEnabled}
           onClick={() => onPublish(item.id)}
-          title="Publish approved post"
+          title={isPublishing ? "Publishing post" : "Publish approved post"}
         >
-          <Send size={15} aria-hidden="true" />
+          {isPublishing ? <LoaderCircle className="publish-spinner" size={15} aria-hidden="true" /> : <Send size={15} aria-hidden="true" />}
         </button>
       </div>
     </div>
@@ -381,6 +385,7 @@ function Dashboard({ onLogout }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [runningAction, setRunningAction] = useState("");
+  const publishRequestLock = useRef(false);
   const [route, setRoute] = useState(routeFromLocation);
   const [pendingSection, setPendingSection] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -489,6 +494,9 @@ function Dashboard({ onLogout }) {
   }
 
   async function handlePublish(itemId) {
+    if (publishRequestLock.current) return;
+
+    publishRequestLock.current = true;
     setRunningAction(`publish-${itemId}`);
     setError("");
     try {
@@ -498,6 +506,7 @@ function Dashboard({ onLogout }) {
       setError(err.message);
     } finally {
       setRunningAction("");
+      publishRequestLock.current = false;
     }
   }
 

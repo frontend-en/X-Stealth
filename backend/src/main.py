@@ -9,8 +9,8 @@ from loguru import logger
 
 from .config import load_settings
 from .logging_config import setup_logging
-from .tweet_source import FileTweetSource
-from .x_bot import XBot
+from .database import PostgresStore
+from .scheduler_worker import SchedulerWorker
 
 
 async def async_main() -> int:
@@ -18,17 +18,13 @@ async def async_main() -> int:
     setup_logging(settings.log_level, settings.logs_dir)
     log = logger.bind(component="main")
 
-    for directory in (settings.logs_dir, settings.screenshots_dir, settings.traces_dir, settings.data_path.parent):
+    for directory in (settings.logs_dir, settings.screenshots_dir, settings.traces_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    source = FileTweetSource(settings.data_path)
-    text = source.next_tweet()
-    if text is None:
-        log.warning("No tweets found", path=str(settings.data_path))
-        return 0
-
-    bot = XBot(settings)
-    await bot.run_once(text)
+    store = PostgresStore(settings.database_url)
+    worker = SchedulerWorker(settings, store)
+    await worker.run_cycle()
+    log.info("Completed one PostgreSQL queue scheduling cycle")
     return 0
 
 

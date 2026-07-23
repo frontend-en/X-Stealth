@@ -608,6 +608,24 @@ th {
   color: #ffffff;
 }
 
+.row-button.publish:disabled {
+  opacity: 0.78;
+}
+
+.publish-spinner {
+  animation: publish-spin 0.8s linear infinite;
+}
+
+@keyframes publish-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .publish-spinner {
+    animation: none;
+  }
+}
+
 .row-actions {
   display: inline-flex;
   flex-wrap: wrap;

@@ -1,7 +1,8 @@
 # Production deployment
 
 This project is designed for a Linux host with Docker Engine and the Docker
-Compose plugin. The dashboard is exposed on `FRONTEND_PORT`; Nginx proxies
+Compose plugin. PostgreSQL runs as an internal Compose service backed by the
+named `postgres_data` volume; it is never published in production. The dashboard is exposed on `FRONTEND_PORT`; Nginx proxies
 `/api/*` to the API container. The API port is bound only to the server's
 loopback interface by default. Compose also starts a scheduler worker that only
 processes approved queue items whose `scheduledFor` time has passed.
@@ -34,10 +35,13 @@ Alternatively, deploy manually:
    make env-prod
    ```
 
-3. Edit `.env.prod`. Set a long, unique `DASHBOARD_PASSWORD` before starting
-   the stack. Keep `AUTH_COOKIE_SECURE=true` when TLS is terminated in front
+3. Edit `.env.prod`. Set a long, unique `DASHBOARD_PASSWORD` and
+   `POSTGRES_PASSWORD` before starting. Set `DOCKER_DATABASE_URL` to the
+   PostgreSQL URL that uses the Compose hostname `postgres`; URL-encode its
+   password. `DATABASE_URL` is only needed for backend commands run directly
+   on the host. Keep `AUTH_COOKIE_SECURE=true` when TLS is terminated in front
    of the dashboard. Keep `DRY_RUN=true`, `POSTING_ENABLED=false`, and
-   `HEADLESS=true` until an owned-account dry run has been verified. Leave
+   `HEADLESS=true` until an owned-account dry run has been verified.
    `VITE_API_BASE_URL` is only used for local Vite development. Docker uses
    Nginx's same-origin `/api` proxy by default; set
    `DOCKER_VITE_API_BASE_URL` only when the API must be hosted separately.

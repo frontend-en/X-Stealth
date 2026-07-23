@@ -6,10 +6,7 @@ disk.  Everything that represents business state is stored in PostgreSQL.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Iterable
 
 import psycopg
@@ -107,12 +104,14 @@ class PostgresStore:
                     name TEXT PRIMARY KEY,
                     acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
-                CREATE TABLE IF NOT EXISTS legacy_imports (
-                    source_path TEXT PRIMARY KEY,
-                    content_hash TEXT NOT NULL,
-                    imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                );
+                DROP TABLE IF EXISTS legacy_imports;
                 """
+            )
+            cursor.execute(
+                "INSERT INTO schema_migrations (version) VALUES ('001_postgresql_state') ON CONFLICT DO NOTHING"
+            )
+            cursor.execute(
+                "INSERT INTO schema_migrations (version) VALUES ('002_remove_legacy_file_storage') ON CONFLICT DO NOTHING"
             )
         self._schema_ready = True
 
@@ -231,27 +230,6 @@ class PostgresStore:
                 "COALESCE((SELECT MAX(session_number) + 1 FROM conversations), 1)) AS value"
             )
             return int(cursor.fetchone()["value"])
-
-    def import_once(self, source: Path, importer) -> bool:
-        """Run an idempotent legacy importer when the source contents change."""
-        if not source.exists():
-            return False
-        content = source.read_bytes()
-        digest = hashlib.sha256(content).hexdigest()
-        self.ensure_schema()
-        with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT content_hash FROM legacy_imports WHERE source_path = %s", (str(source.resolve()),))
-            row = cursor.fetchone()
-            if row and row["content_hash"] == digest:
-                return False
-        importer(content.decode("utf-8"))
-        with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO legacy_imports (source_path, content_hash) VALUES (%s, %s)
-                ON CONFLICT (source_path) DO UPDATE SET content_hash = EXCLUDED.content_hash, imported_at = NOW()""",
-                (str(source.resolve()), digest),
-            )
-        return True
 
     def _connect(self):
         return psycopg.connect(self.database_url, row_factory=dict_row)

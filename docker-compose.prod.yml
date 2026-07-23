@@ -28,7 +28,7 @@ services:
 
   bot:
     image: ${BACKEND_IMAGE:-x-stealth-autoposter-backend:prod}
-    restart: "no"
+    restart: always
     logging:
       driver: json-file
       options:

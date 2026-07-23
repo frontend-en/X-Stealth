@@ -52,7 +52,6 @@ class PublicSettingsResponse(BaseModel):
     postingEnabled: bool
     headless: bool
     xBaseUrl: str
-    dataPath: str
     logsDir: str
     screenshotsDir: str
     tracesDir: str

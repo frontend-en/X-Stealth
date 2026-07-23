@@ -17,7 +17,6 @@ def get_public_settings(
         postingEnabled=settings.posting_enabled,
         headless=settings.headless,
         xBaseUrl=settings.x_base_url,
-        dataPath=settings.data_path.as_posix(),
         logsDir=settings.logs_dir.as_posix(),
         screenshotsDir=settings.screenshots_dir.as_posix(),
         tracesDir=settings.traces_dir.as_posix(),

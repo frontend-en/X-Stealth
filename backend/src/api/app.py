@@ -119,13 +119,8 @@ def get_store(settings: Annotated[Settings, Depends(get_settings)]) -> PostgresS
     if not hasattr(app.state, "store"):
         store = PostgresStore(settings.database_url)
         store.ensure_schema()
-        queue = QueueService(settings.data_path, settings.agent_queue_path, store)
-        queue.migrate_legacy_files()
+        queue = QueueService(store)
         run_service = RunService(settings, queue, ArtifactService(settings), store=store)
-        run_service.migrate_legacy_file()
-        run_service.funnel_service.migrate_legacy_file()
-        AgentHarness(settings, queue, run_service, ArtifactService(settings), store=store).events.migrate_legacy_file()
-        PipelineOrchestrator(settings, queue, store=store).store.migrate_legacy_files()
         app.state.store = store
     return app.state.store
 
@@ -133,7 +128,7 @@ def get_store(settings: Annotated[Settings, Depends(get_settings)]) -> PostgresS
 def get_queue_service(
     settings: Annotated[Settings, Depends(get_settings)], store: Annotated[PostgresStore, Depends(get_store)]
 ) -> QueueService:
-    return QueueService(settings.data_path, settings.agent_queue_path, store)
+    return QueueService(store)
 
 
 def get_artifact_service(settings: Annotated[Settings, Depends(get_settings)]) -> ArtifactService:
@@ -147,7 +142,7 @@ def get_quality_service() -> QualityService:
 def get_funnel_service(
     settings: Annotated[Settings, Depends(get_settings)], store: Annotated[PostgresStore, Depends(get_store)]
 ) -> FunnelService:
-    return FunnelService(settings.data_path.parent, store)
+    return FunnelService(store)
 
 
 def get_run_service(

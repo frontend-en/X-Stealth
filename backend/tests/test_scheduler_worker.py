@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,6 +18,7 @@ from src.scheduler_worker import SchedulerWorker
 from src.services.artifact_service import ArtifactService
 from src.services.queue_service import QueueService
 from src.services.run_service import RunService
+from tests.fakes import InMemoryStore
 
 
 class SchedulerWorkerTests(unittest.TestCase):
@@ -28,8 +29,6 @@ class SchedulerWorkerTests(unittest.TestCase):
             dry_run=False,
             posting_enabled=True,
             auth_state_path=auth_path,
-            data_path=root / "tweets.txt",
-            agent_queue_path=root / "queue.jsonl",
             logs_dir=root / "logs",
             screenshots_dir=root / "screenshots",
             traces_dir=root / "traces",
@@ -50,7 +49,8 @@ class SchedulerWorkerTests(unittest.TestCase):
 
     def test_starts_only_due_approved_item(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            worker = SchedulerWorker(self._settings(Path(temp_dir)))
+            with patch("src.scheduler_worker.PostgresStore", return_value=InMemoryStore()):
+                worker = SchedulerWorker(self._settings(Path(temp_dir)))
             now = datetime(2026, 1, 2, tzinfo=timezone.utc)
             due = self._item("due", "approved", now - timedelta(seconds=1))
             future = self._item("future", "approved", now + timedelta(minutes=1))
@@ -67,7 +67,8 @@ class SchedulerWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = self._settings(root)
-            service = RunService(settings, QueueService(settings.data_path, settings.agent_queue_path), ArtifactService(settings))
+            store = InMemoryStore()
+            service = RunService(settings, QueueService(store), ArtifactService(settings), store=store)
             started_at = datetime.now(timezone.utc)
             service._append_run(
                 RunRecord(
