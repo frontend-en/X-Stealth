@@ -19,6 +19,81 @@ body {
   overflow-x: clip;
 }
 
+.login-page {
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  place-items: center;
+  background:
+    radial-gradient(circle at 14% 12%, rgb(25 167 206 / 20%), transparent 30rem),
+    #0d1b2a;
+}
+
+.login-card {
+  width: min(100%, 430px);
+  padding: 32px;
+  border: 1px solid rgb(185 214 234 / 30%);
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgb(1 12 26 / 45%);
+}
+
+.login-card h1 {
+  margin-bottom: 10px;
+}
+
+.login-mark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 24px;
+  place-items: center;
+  border-radius: 12px;
+  background: #19a7ce;
+  color: #06101b;
+}
+
+.login-hint {
+  margin-bottom: 24px;
+  color: #52667d;
+  line-height: 1.5;
+}
+
+.login-hint code {
+  color: #0d5266;
+  font-size: 0.9em;
+}
+
+.login-form {
+  display: grid;
+  gap: 10px;
+}
+
+.login-form label {
+  color: #26384d;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.login-form input {
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid #c7d5e5;
+  border-radius: 8px;
+  color: #142033;
+}
+
+.login-submit {
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.login-error {
+  margin: 0;
+  color: #be123c;
+  font-size: 14px;
+}
+
 button,
 input,
 select {
@@ -139,6 +214,30 @@ button:disabled {
 
 .sidebar nav button.active,
 .sidebar nav button:hover {
+  background: #172a3f;
+  color: #ffffff;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+}
+
+.sidebar-logout {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #b7c7dc;
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar-logout:hover {
   background: #172a3f;
   color: #ffffff;
 }
@@ -612,6 +711,116 @@ th {
   gap: 18px;
 }
 
+.studio-workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.28fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.studio-main {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.session-history {
+  display: grid;
+  gap: 12px;
+  max-height: calc(100vh - 110px);
+  position: sticky;
+  top: 18px;
+}
+
+.session-history .panel-header {
+  gap: 10px;
+}
+
+.session-history .icon-button {
+  flex: 0 0 auto;
+}
+
+.session-new-button {
+  justify-content: center;
+}
+
+.session-list {
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.session-card {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border: 1px solid #dbe3ef;
+  border-radius: 9px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.session-card:hover,
+.session-card.active {
+  border-color: #0f766e;
+  background: #effcf9;
+}
+
+.session-card-open {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px;
+  border: 0;
+  background: transparent;
+  color: #142033;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-card-open > span,
+.session-card-open small,
+.session-card-open em {
+  color: #62748a;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.session-card-open strong,
+.session-card-open em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-card-open strong {
+  font-size: 13px;
+}
+
+.session-delete-button {
+  align-self: center;
+  width: 34px;
+  min-height: 34px;
+  margin-right: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8b99ab;
+}
+
+.session-delete-button:hover:not(:disabled),
+.session-delete-button:focus-visible {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.session-delete-button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
 .studio-header {
   display: flex;
   align-items: flex-start;
@@ -691,6 +900,18 @@ th {
   line-height: 1.45;
 }
 
+.chat-run-link {
+  margin-top: 8px;
+  border: 0;
+  background: transparent;
+  color: #0f766e;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0;
+}
+
 .chat-compose {
   display: grid;
   gap: 10px;
@@ -731,6 +952,24 @@ th {
   color: #62748a;
   font-size: 13px;
   text-transform: capitalize;
+}
+
+.run-picker {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 12px;
+  color: #62748a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.run-picker select {
+  width: 100%;
+  border: 1px solid #d6dfeb;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #142033;
+  padding: 8px;
 }
 
 .agent-cards {
@@ -1008,6 +1247,7 @@ th {
 
   .metrics-grid,
   .dashboard-grid,
+  .studio-workspace,
   .studio-grid,
   .candidate-grid {
     grid-template-columns: 1fr;
@@ -1215,6 +1455,19 @@ th {
 
   .studio-header > svg {
     display: none;
+  }
+
+  .session-history {
+    max-height: none;
+    position: static;
+  }
+
+  .session-list {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(210px, 78%);
+    grid-template-columns: none;
+    overflow-x: auto;
+    padding-bottom: 3px;
   }
 
   .studio-chat,

@@ -34,6 +34,14 @@ class HealthResponse(BaseModel):
     time: datetime
 
 
+class PasswordLoginRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class AuthSessionResponse(BaseModel):
+    authenticated: bool
+
+
 class WarmupScrollRange(BaseModel):
     min: int
     max: int
@@ -251,9 +259,11 @@ ChatRole = Literal["user", "assistant"]
 
 class Conversation(BaseModel):
     id: str
+    sessionNumber: int = Field(ge=1)
     title: str
     createdAt: datetime
     updatedAt: datetime
+    deletedAt: datetime | None = None
 
 
 class ChatMessage(BaseModel):
@@ -314,12 +324,23 @@ class ConversationDetail(Conversation):
     runs: list[PipelineRun] = Field(default_factory=list)
 
 
+class ConversationSummary(Conversation):
+    lastMessagePreview: str = ""
+    lastRunStatus: PipelineRunStatus | None = None
+
+
+class ConversationListResponse(BaseModel):
+    items: list[ConversationSummary] = Field(default_factory=list)
+    total: int = 0
+
+
 class CreateConversationRequest(BaseModel):
     title: str = Field(default="Новый AI-диалог", min_length=1, max_length=120)
 
 
 class CreateConversationResponse(BaseModel):
     id: str
+    sessionNumber: int
 
 
 class CreateChatMessageRequest(BaseModel):

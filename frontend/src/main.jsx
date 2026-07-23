@@ -21,6 +21,7 @@ import {
   Clock3,
   FileText,
   Gauge,
+  LogOut,
   Play,
   RefreshCw,
   Search,
@@ -36,10 +37,14 @@ import {
   getRuns,
   getSettings,
   getHealth,
+  getAuthSession,
+  logout,
   rejectQueueItem,
   skipQueueItem,
   startDryRun,
-  startPublish
+  startPublish,
+  login,
+  setUnauthorizedHandler
 } from "./api/client";
 import AiStudio from "./components/AiStudio";
 import "./styles.css";
@@ -306,7 +311,67 @@ function buildRunChart(runs) {
   }));
 }
 
-function App() {
+function routeFromLocation() {
+  const match = window.location.pathname.match(/^\/ai-studio\/s\/(\d+)\/?$/);
+  if (match) return { view: "studio", sessionNumber: Number(match[1]) };
+  if (window.location.pathname === "/ai-studio" || window.location.pathname === "/ai-studio/") {
+    return { view: "studio", sessionNumber: null };
+  }
+  return { view: "dashboard", sessionNumber: null };
+}
+
+function LoginScreen({ onAuthenticated }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!password || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      await login(password);
+      setPassword("");
+      onAuthenticated();
+    } catch (err) {
+      setError(err.message || "Не удалось войти.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-card" aria-labelledby="login-title">
+        <div className="login-mark"><ShieldCheck size={30} aria-hidden="true" /></div>
+        <p className="eyebrow">X Stealth AutoPoster</p>
+        <h1 id="login-title">Вход в панель</h1>
+        <p className="login-hint">Введите пароль, заданный в <code>DASHBOARD_PASSWORD</code> на сервере.</p>
+        <form className="login-form" onSubmit={submit}>
+          <label htmlFor="dashboard-password">Пароль</label>
+          <input
+            id="dashboard-password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            disabled={submitting}
+            autoFocus
+            required
+          />
+          {error ? <p className="login-error" role="alert">{error}</p> : null}
+          <button className="primary-button login-submit" type="submit" disabled={submitting || !password}>
+            {submitting ? "Проверяю…" : "Войти"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function Dashboard({ onLogout }) {
   const [settings, setSettings] = useState(null);
   const [queue, setQueue] = useState([]);
   const [runs, setRuns] = useState([]);
@@ -316,9 +381,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [runningAction, setRunningAction] = useState("");
-  const [view, setView] = useState("dashboard");
+  const [route, setRoute] = useState(routeFromLocation);
   const [pendingSection, setPendingSection] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const view = route.view;
 
   const refresh = useCallback(async () => {
     setError("");
@@ -352,10 +418,27 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const syncRoute = () => setRoute(routeFromLocation());
+    window.addEventListener("popstate", syncRoute);
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
+
   function showDashboardSection(section) {
     window.history.replaceState(null, "", `#${section}`);
     setPendingSection(section);
-    setView("dashboard");
+    setRoute({ view: "dashboard", sessionNumber: null });
+  }
+
+  function openStudio(sessionNumber = null) {
+    const path = sessionNumber ? `/ai-studio/s/${sessionNumber}` : "/ai-studio";
+    window.history.pushState(null, "", path);
+    setRoute({ view: "studio", sessionNumber });
+  }
+
+  function openDashboard() {
+    window.history.pushState(null, "", "/");
+    setRoute({ view: "dashboard", sessionNumber: null });
   }
 
   const filteredQueue = useMemo(() => {
@@ -432,11 +515,11 @@ function App() {
         </div>
 
         <nav>
-          <button type="button" aria-label="Обзор" className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>
+          <button type="button" aria-label="Обзор" className={view === "dashboard" ? "active" : ""} onClick={openDashboard}>
             <BarChart3 size={18} aria-hidden="true" />
             Обзор
           </button>
-          <button type="button" aria-label="AI Studio" className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}>
+          <button type="button" aria-label="AI Studio" className={view === "studio" ? "active" : ""} onClick={() => openStudio()}>
             <Sparkles size={18} aria-hidden="true" />
             AI Studio
           </button>
@@ -445,10 +528,16 @@ function App() {
             Очередь
           </button>
         </nav>
+        <div className="sidebar-footer">
+          <button type="button" className="sidebar-logout" onClick={onLogout}>
+            <LogOut size={18} aria-hidden="true" />
+            Выйти
+          </button>
+        </div>
       </aside>
 
       {view === "studio" ? (
-        <section className="content"><AiStudio onDraftCreated={() => { setView("dashboard"); refresh().catch((err) => setError(err.message)); }} /></section>
+        <section className="content"><AiStudio sessionNumber={route.sessionNumber} onNavigateSession={openStudio} onDraftCreated={() => { openDashboard(); refresh().catch((err) => setError(err.message)); }} /></section>
       ) : (
       <section className="content" id="overview">
         <header className="topbar">
@@ -710,6 +799,40 @@ function App() {
       )}
     </main>
   );
+}
+
+function App() {
+  const [authenticated, setAuthenticated] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    setUnauthorizedHandler(() => {
+      if (active) setAuthenticated(false);
+    });
+    getAuthSession()
+      .then((session) => {
+        if (active) setAuthenticated(session.authenticated);
+      })
+      .catch(() => {
+        if (active) setAuthenticated(false);
+      });
+    return () => {
+      active = false;
+      setUnauthorizedHandler(null);
+    };
+  }, []);
+
+  if (authenticated === null) {
+    return <main className="login-page"><div className="state-banner">Проверяю сессию…</div></main>;
+  }
+  if (!authenticated) return <LoginScreen onAuthenticated={() => setAuthenticated(true)} />;
+  return <Dashboard onLogout={async () => {
+    try {
+      await logout();
+    } finally {
+      setAuthenticated(false);
+    }
+  }} />;
 }
 
 const rootElement = document.getElementById("root");

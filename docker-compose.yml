@@ -1,4 +1,18 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-x_autoposter}
+      POSTGRES_USER: ${POSTGRES_USER:-x_autoposter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
   api:
     build:
       context: ./backend
@@ -9,10 +23,14 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      AUTH_SESSION_TTL_MINUTES: ${AUTH_SESSION_TTL_MINUTES:-480}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
       DRY_RUN: ${DRY_RUN:-true}
       POSTING_ENABLED: ${POSTING_ENABLED:-false}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?DOCKER_DATABASE_URL must be set in .env}
       HEADLESS: ${HEADLESS:-true}
       X_BASE_URL: ${X_BASE_URL:-https://x.com}
       SLOW_MO_MS: ${SLOW_MO_MS:-0}
@@ -41,6 +59,9 @@ services:
       - ./backend/logs:/app/logs
       - ./backend/screenshots:/app/screenshots
       - ./backend/traces:/app/traces
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -59,7 +80,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        # Docker serves the dashboard and API through the same Nginx origin.
+        # Do not reuse VITE_API_BASE_URL from local Vite development here: it
+        # would make browser session cookies cross-origin.
+        VITE_API_BASE_URL: ${DOCKER_VITE_API_BASE_URL:-}
     image: x-stealth-autoposter-frontend:local
     restart: unless-stopped
     ports:
@@ -69,13 +93,11 @@ services:
         condition: service_healthy
 
   bot:
-    profiles:
-      - bot
     image: x-stealth-autoposter-backend:local
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: python -m src.main
+    command: python -m src.scheduler_worker
     environment:
       PYTHONUNBUFFERED: "1"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -83,6 +105,7 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-}
       DRY_RUN: ${DRY_RUN:-true}
       POSTING_ENABLED: ${POSTING_ENABLED:-false}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?DOCKER_DATABASE_URL must be set in .env}
       HEADLESS: ${HEADLESS:-true}
       X_BASE_URL: ${X_BASE_URL:-https://x.com}
       SLOW_MO_MS: ${SLOW_MO_MS:-0}
@@ -109,3 +132,9 @@ services:
       - ./backend/logs:/app/logs
       - ./backend/screenshots:/app/screenshots
       - ./backend/traces:/app/traces
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

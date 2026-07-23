@@ -23,8 +23,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     cors_origins: str = ""
+    dashboard_password: str | None = None
+    auth_session_ttl_minutes: int = Field(default=480, ge=5, le=10080)
+    auth_cookie_secure: bool = False
     dry_run: bool = True
     posting_enabled: bool = False
+    database_url: str = "postgresql://x_autoposter:x_autoposter@localhost:5432/x_autoposter"
 
     x_base_url: str = "https://x.com"
     headless: bool = True

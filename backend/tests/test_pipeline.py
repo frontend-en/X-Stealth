@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.agent.pipeline import OpenAIStageClient, PipelineOrchestrator, StageResult
@@ -98,6 +100,93 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             orchestrator.retry(run.id)
             await orchestrator.tasks[run.id]
             self.assertEqual(orchestrator.get_run(run.id).status, "completed")
+
+    async def test_sessions_receive_numbers_titles_and_history_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(
+                data_path=root / "tweets.txt",
+                agent_queue_path=root / "queue.jsonl",
+                pipeline_conversations_path=root / "conversations.jsonl",
+                pipeline_messages_path=root / "messages.jsonl",
+                pipeline_runs_path=root / "runs.jsonl",
+            )
+            orchestrator = PipelineOrchestrator(settings, QueueService(settings.data_path, settings.agent_queue_path), client=FakeStageClient())
+            first = orchestrator.create_conversation("Untitled")
+            second = orchestrator.create_conversation("Untitled")
+
+            self.assertEqual(first.sessionNumber, 1)
+            self.assertEqual(second.sessionNumber, 2)
+
+            _, run = orchestrator.start(first.id, "Сделай пост о B2B-воронке")
+            await orchestrator.tasks[run.id]
+
+            detail = orchestrator.get_conversation_by_number(1)
+            self.assertIsNotNone(detail)
+            self.assertEqual(detail.title, "Сделай пост о B2B-воронке")
+            summaries, total = orchestrator.list_conversations(limit=10, offset=0)
+            self.assertEqual(total, 2)
+            self.assertEqual(summaries[0].sessionNumber, 1)
+            self.assertEqual(summaries[0].lastRunStatus, "completed")
+            self.assertTrue(summaries[0].lastMessagePreview)
+
+    async def test_legacy_conversations_are_backfilled_once_in_creation_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            conversations_path = root / "conversations.jsonl"
+            now = datetime.now(timezone.utc)
+            legacy = [
+                {"id": "conversation-old", "title": "Old", "createdAt": now.isoformat(), "updatedAt": now.isoformat()},
+                {
+                    "id": "conversation-new",
+                    "title": "New",
+                    "createdAt": (now + timedelta(seconds=1)).isoformat(),
+                    "updatedAt": now.isoformat(),
+                },
+            ]
+            conversations_path.write_text("\n".join(json.dumps(item) for item in legacy) + "\n", encoding="utf-8")
+            settings = Settings(
+                data_path=root / "tweets.txt",
+                agent_queue_path=root / "queue.jsonl",
+                pipeline_conversations_path=conversations_path,
+                pipeline_messages_path=root / "messages.jsonl",
+                pipeline_runs_path=root / "runs.jsonl",
+            )
+
+            orchestrator = PipelineOrchestrator(settings, QueueService(settings.data_path, settings.agent_queue_path), client=FakeStageClient())
+            self.assertEqual(orchestrator.get_conversation("conversation-old").sessionNumber, 1)
+            self.assertEqual(orchestrator.get_conversation("conversation-new").sessionNumber, 2)
+
+            restarted = PipelineOrchestrator(settings, QueueService(settings.data_path, settings.agent_queue_path), client=FakeStageClient())
+            self.assertEqual(restarted.get_conversation_by_number(1).id, "conversation-old")
+            self.assertEqual(restarted.get_conversation_by_number(2).id, "conversation-new")
+
+    async def test_deleted_session_is_hidden_and_its_number_is_not_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(
+                data_path=root / "tweets.txt",
+                agent_queue_path=root / "queue.jsonl",
+                pipeline_conversations_path=root / "conversations.jsonl",
+                pipeline_messages_path=root / "messages.jsonl",
+                pipeline_runs_path=root / "runs.jsonl",
+            )
+            orchestrator = PipelineOrchestrator(settings, QueueService(settings.data_path, settings.agent_queue_path), client=FakeStageClient())
+            first = orchestrator.create_conversation("First")
+            second = orchestrator.create_conversation("Second")
+
+            self.assertTrue(orchestrator.delete_conversation(first.id))
+            self.assertIsNone(orchestrator.get_conversation(first.id))
+            self.assertIsNone(orchestrator.get_conversation_by_number(first.sessionNumber))
+            summaries, total = orchestrator.list_conversations(limit=10, offset=0)
+            self.assertEqual(total, 1)
+            self.assertEqual(summaries[0].id, second.id)
+
+            third = orchestrator.create_conversation("Third")
+            self.assertEqual(third.sessionNumber, 3)
+
+            restarted = PipelineOrchestrator(settings, QueueService(settings.data_path, settings.agent_queue_path), client=FakeStageClient())
+            self.assertIsNone(restarted.get_conversation_by_number(1))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,13 @@
 services:
+  postgres:
+    restart: always
+    ports: !reset []
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: "${LOG_MAX_FILE:-5}"
+
   api:
     image: ${BACKEND_IMAGE:-x-stealth-autoposter-backend:prod}
     restart: always

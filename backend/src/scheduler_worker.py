@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from .config import Settings, load_settings
+from .database import PostgresStore
 from .logging_config import setup_logging
 from .services.artifact_service import ArtifactService
 from .services.queue_service import QueueService
@@ -19,8 +20,13 @@ class SchedulerWorker:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.queue_service = QueueService(settings.data_path, settings.agent_queue_path)
-        self.run_service = RunService(settings, self.queue_service, ArtifactService(settings))
+        self.store = PostgresStore(settings.database_url)
+        self.store.ensure_schema()
+        self.queue_service = QueueService(settings.data_path, settings.agent_queue_path, self.store)
+        self.queue_service.migrate_legacy_files()
+        self.run_service = RunService(settings, self.queue_service, ArtifactService(settings), store=self.store)
+        self.run_service.migrate_legacy_file()
+        self.run_service.funnel_service.migrate_legacy_file()
         self.log = logger.bind(component="scheduler")
 
     async def run_forever(self) -> None:

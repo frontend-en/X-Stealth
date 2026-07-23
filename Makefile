@@ -7,7 +7,7 @@ PROD_ENV ?= .env.prod
 LOCAL_PROJECT ?= x-stealth-autoposter
 PROD_PROJECT ?= x-stealth-autoposter-prod
 
-LOCAL_COMPOSE = $(COMPOSE) --env-file $(LOCAL_ENV) --project-name $(LOCAL_PROJECT) -f docker-compose.yml
+LOCAL_COMPOSE = $(COMPOSE) --env-file $(LOCAL_ENV) --project-name $(LOCAL_PROJECT) -f docker-compose.yml -f docker-compose.local.yml
 PROD_COMPOSE = $(COMPOSE) --env-file $(PROD_ENV) --project-name $(PROD_PROJECT) -f docker-compose.yml -f docker-compose.prod.yml
 
 LOCAL_HEALTH_URL ?= http://127.0.0.1:8000/api/v1/health
@@ -36,13 +36,14 @@ help:
 	@echo ""
 	@echo "Local:"
 	@echo "  make local-build        Build local Docker images"
-	@echo "  make local-up           Start local API and dashboard"
+	@echo "  make local-up           Start local PostgreSQL, API, dashboard, and scheduler"
 	@echo "  make local-down         Stop local stack"
 	@echo "  make local-restart      Restart local stack"
 	@echo "  make local-logs         Tail local stack logs"
 	@echo "  make local-ps           Show local containers"
 	@echo "  make local-health       Check local API health"
 	@echo "  make local-bot          Start the local scheduler worker"
+	@echo "  make local-db-shell     Open psql in the local PostgreSQL container"
 	@echo ""
 	@echo "Production:"
 	@echo "  make prod-config        Render production Compose config"
@@ -55,6 +56,7 @@ help:
 	@echo "  make prod-health        Check production API health"
 	@echo "  make prod-pull          Pull production images"
 	@echo "  make prod-push          Push production images"
+	@echo "  make prod-db-shell      Open psql in the production PostgreSQL container"
 	@echo "  make prod-first-deploy  Upload source to VPS and start the complete stack"
 	@echo ""
 	@echo "Verification:"
@@ -85,7 +87,7 @@ local-config: env-local
 
 verify: backend-compile frontend-build local-config
 
-.PHONY: local-build local-up local-down local-restart local-logs local-ps local-health local-bot
+.PHONY: local-build local-up local-down local-restart local-logs local-ps local-health local-bot local-db-shell
 local-build: env-local
 	$(LOCAL_COMPOSE) build
 
@@ -109,7 +111,10 @@ local-health:
 local-bot: env-local
 	$(LOCAL_COMPOSE) up -d bot
 
-.PHONY: prod-config prod-build prod-up prod-down prod-restart prod-logs prod-ps prod-health prod-bot prod-pull prod-push
+local-db-shell: env-local
+	$(LOCAL_COMPOSE) exec postgres psql -U $${POSTGRES_USER:-x_autoposter} -d $${POSTGRES_DB:-x_autoposter}
+
+.PHONY: prod-config prod-build prod-up prod-down prod-restart prod-logs prod-ps prod-health prod-bot prod-pull prod-push prod-db-shell
 prod-config: require-prod-env
 	$(PROD_COMPOSE) config
 
@@ -141,6 +146,9 @@ prod-pull: require-prod-env
 
 prod-push: require-prod-env
 	$(PROD_COMPOSE) push
+
+prod-db-shell: require-prod-env
+	$(PROD_COMPOSE) exec postgres psql -U $${POSTGRES_USER:-x_autoposter} -d $${POSTGRES_DB:-x_autoposter}
 
 .PHONY: require-vps prod-first-deploy
 require-vps:

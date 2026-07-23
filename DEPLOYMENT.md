@@ -34,9 +34,13 @@ Alternatively, deploy manually:
    make env-prod
    ```
 
-3. Edit `.env.prod`. Keep `DRY_RUN=true`, `POSTING_ENABLED=false`, and
+3. Edit `.env.prod`. Set a long, unique `DASHBOARD_PASSWORD` before starting
+   the stack. Keep `AUTH_COOKIE_SECURE=true` when TLS is terminated in front
+   of the dashboard. Keep `DRY_RUN=true`, `POSTING_ENABLED=false`, and
    `HEADLESS=true` until an owned-account dry run has been verified. Leave
-   `VITE_API_BASE_URL` empty when using this Compose stack.
+   `VITE_API_BASE_URL` is only used for local Vite development. Docker uses
+   Nginx's same-origin `/api` proxy by default; set
+   `DOCKER_VITE_API_BASE_URL` only when the API must be hosted separately.
 4. Place the owned-account Playwright session state at `backend/auth.json`.
    This file is not committed and must be readable by Docker. Do not copy it
    through source control.

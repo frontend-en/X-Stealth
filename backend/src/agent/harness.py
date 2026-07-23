@@ -22,6 +22,7 @@ from src.api.schemas import (
     QueueItem,
 )
 from src.config import Settings
+from src.database import PostgresStore
 from src.services.quality_service import QualityService
 from src.services.artifact_service import ArtifactService
 from src.services.queue_service import QueueService, validate_post_text
@@ -39,13 +40,14 @@ class AgentHarness:
         artifact_service: ArtifactService,
         context_loader: AgentContextLoader | None = None,
         event_writer: AgentEventWriter | None = None,
+        store: PostgresStore | None = None,
     ) -> None:
         self.settings = settings
         self.queue_service = queue_service
         self.run_service = run_service
         self.artifact_service = artifact_service
         self.context_loader = context_loader or AgentContextLoader()
-        self.events = event_writer or AgentEventWriter(settings)
+        self.events = event_writer or AgentEventWriter(settings, store)
         self.policy = AgentPolicy(settings)
         self.quality_service = QualityService()
 
@@ -57,7 +59,7 @@ class AgentHarness:
             canDryRun=self.settings.agent_enabled,
             canPublish=can_publish,
             publishBlockedReason=None if can_publish else reason or "Agent harness is disabled.",
-            queueStorage="jsonl",
+            queueStorage="postgresql" if self.queue_service.store is not None else "jsonl",
             requiresHumanApprovalForPublish=self.settings.agent_publish_requires_approval,
         )
 

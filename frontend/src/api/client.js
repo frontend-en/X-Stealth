@@ -1,4 +1,17 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+let unauthorizedHandler = null;
+
+export class AuthenticationError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = "AuthenticationError";
+    this.code = code;
+  }
+}
+
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = handler;
+}
 
 async function request(path, options = {}) {
   const headers = {
@@ -7,8 +20,9 @@ async function request(path, options = {}) {
   };
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
     headers,
-    ...options
+    credentials: "include"
   });
 
   const contentType = response.headers.get("content-type") || "";
@@ -17,6 +31,10 @@ async function request(path, options = {}) {
   if (!response.ok) {
     const apiError = payload?.detail?.error || payload?.error;
     const message = apiError?.message || response.statusText || "Запрос не выполнен";
+    if (["AUTH_REQUIRED", "SESSION_EXPIRED"].includes(apiError?.code)) {
+      unauthorizedHandler?.();
+      throw new AuthenticationError(message, apiError.code);
+    }
     throw new Error(message);
   }
 
@@ -25,6 +43,21 @@ async function request(path, options = {}) {
 
 export function getHealth() {
   return request("/api/v1/health");
+}
+
+export function getAuthSession() {
+  return request("/api/v1/auth/session");
+}
+
+export function login(password) {
+  return request("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+}
+
+export function logout() {
+  return request("/api/v1/auth/logout", { method: "POST" });
 }
 
 export function getSettings() {
@@ -118,6 +151,18 @@ export function createConversation(title = "Новый AI-диалог") {
 
 export function getConversation(conversationId) {
   return request(`/api/v1/conversations/${conversationId}`);
+}
+
+export function getConversations(limit = 50, offset = 0) {
+  return request(`/api/v1/conversations?limit=${limit}&offset=${offset}`);
+}
+
+export function getConversationBySessionNumber(sessionNumber) {
+  return request(`/api/v1/conversations/sessions/${sessionNumber}`);
+}
+
+export function deleteConversation(conversationId) {
+  return request(`/api/v1/conversations/${conversationId}`, { method: "DELETE" });
 }
 
 export function sendChatMessage(conversationId, content) {

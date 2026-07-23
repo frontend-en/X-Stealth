@@ -18,6 +18,7 @@ from src.services.funnel_service import FunnelService
 from src.services.quality_service import QualityService
 from src.services.artifact_service import ArtifactService
 from src.services.queue_service import QueueService, validate_post_text
+from src.database import PostgresStore
 
 
 class RunService:
@@ -29,14 +30,16 @@ class RunService:
         queue_service: QueueService,
         artifact_service: ArtifactService,
         publisher: Publisher | None = None,
+        store: PostgresStore | None = None,
     ) -> None:
         self.settings = settings
         self.queue_service = queue_service
         self.artifact_service = artifact_service
         self.publisher = publisher or XPublisher(settings)
+        self.store = store
         self.runs_path = settings.data_path.parent / "runs.jsonl"
         self.quality_service = QualityService()
-        self.funnel_service = FunnelService(settings.data_path.parent)
+        self.funnel_service = FunnelService(settings.data_path.parent, store)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._publish_lock_path = settings.data_path.parent / "active-publish.lock"
         self._owns_publish_lock = False
@@ -106,7 +109,9 @@ class RunService:
             return False, "Auth state is missing."
         if any(not task.done() for task in self._tasks.values()):
             return False, "Another publish run is already active."
-        if self._publish_lock_path.exists():
+        if self.store is not None and self.store.publish_locked():
+            return False, "Another publish run is already active."
+        if self.store is None and self._publish_lock_path.exists():
             return False, "Another publish run is already active."
         next_allowed_at = self.next_publish_allowed_at()
         if next_allowed_at is not None and self._now() < next_allowed_at:
@@ -217,6 +222,8 @@ class RunService:
         return self.artifact_service.list_artifacts(limit=5)
 
     def _read_runs(self) -> list[RunRecord]:
+        if self.store is not None:
+            return [RunRecord.model_validate(row) for row in self.store.runs()]
         latest: dict[str, RunRecord] = {}
         if not self.runs_path.exists():
             return []
@@ -232,6 +239,9 @@ class RunService:
         return list(latest.values())
 
     def _append_run(self, run: RunRecord) -> None:
+        if self.store is not None:
+            self.store.upsert_run(run.model_dump(mode="json"))
+            return
         self.runs_path.parent.mkdir(parents=True, exist_ok=True)
         with self.runs_path.open("a", encoding="utf-8") as handle:
             handle.write(run.model_dump_json() + "\n")
@@ -275,6 +285,10 @@ class RunService:
 
     def _acquire_publish_lock(self) -> bool:
         """Atomically reserve the shared data directory for one publish attempt."""
+        if self.store is not None:
+            claimed = self.store.claim_publish_lock()
+            self._owns_publish_lock = claimed
+            return claimed
         self._publish_lock_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             descriptor = os.open(self._publish_lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -288,7 +302,28 @@ class RunService:
     def _release_publish_lock(self) -> None:
         if not self._owns_publish_lock:
             return
+        if self.store is not None:
+            self.store.release_publish_lock()
+            self._owns_publish_lock = False
+            return
         try:
             self._publish_lock_path.unlink(missing_ok=True)
         finally:
             self._owns_publish_lock = False
+
+    def migrate_legacy_file(self) -> None:
+        if self.store is None:
+            return
+
+        def import_runs(raw: str) -> None:
+            latest: dict[str, RunRecord] = {}
+            for line in raw.splitlines():
+                try:
+                    item = RunRecord.model_validate(json.loads(line))
+                    latest[item.id] = item
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            for item in latest.values():
+                self.store.upsert_run(item.model_dump(mode="json"))
+
+        self.store.import_once(self.runs_path, import_runs)

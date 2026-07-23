@@ -7,6 +7,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -15,12 +16,14 @@ from src.api.schemas import (
     ChatMessage,
     Conversation,
     ConversationDetail,
+    ConversationSummary,
     PipelineArtifact,
     PipelineRun,
     PipelineStage,
     PostCandidate,
 )
 from src.config import Settings
+from src.database import PostgresStore
 from src.services.queue_service import QueueService
 
 
@@ -50,7 +53,7 @@ class StageResult(BaseModel):
 class OpenAIStageClient:
     """Small OpenAI Responses adapter kept outside orchestration and publishing."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, store: PostgresStore | None = None) -> None:
         self.settings = settings
 
     async def run(self, stage_id: str, prompt: str, *, use_web_search: bool) -> StageResult:
@@ -155,40 +158,140 @@ class PipelineStore:
         self.conversations_path = settings.pipeline_conversations_path
         self.messages_path = settings.pipeline_messages_path
         self.runs_path = settings.pipeline_runs_path
+        self.store = store
+        self._lock = RLock()
+        self._ensure_session_numbers()
 
     def save_conversation(self, item: Conversation) -> None:
+        if self.store is not None:
+            self.store.upsert(
+                "conversations", item.model_dump(mode="json"), session_number=item.sessionNumber,
+                updated_at=item.updatedAt, deleted_at=item.deletedAt,
+            )
+            return
         self._append(self.conversations_path, item.model_dump(mode="json"))
 
     def save_message(self, item: ChatMessage) -> None:
+        if self.store is not None:
+            self.store.upsert(
+                "chat_messages", item.model_dump(mode="json"), conversation_id=item.conversationId, created_at=item.createdAt
+            )
+            return
         self._append(self.messages_path, item.model_dump(mode="json"))
 
     def save_run(self, item: PipelineRun) -> None:
+        if self.store is not None:
+            self.store.upsert(
+                "pipeline_runs", item.model_dump(mode="json"), conversation_id=item.conversationId,
+                updated_at=item.updatedAt, status=item.status,
+            )
+            return
         self._append(self.runs_path, item.model_dump(mode="json"))
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
-        return self._latest(self.conversations_path, Conversation).get(conversation_id)
+        return self._conversations().get(conversation_id)
+
+    def get_conversation_by_number(self, session_number: int) -> Conversation | None:
+        return next(
+            (item for item in self._conversations().values() if item.sessionNumber == session_number),
+            None,
+        )
 
     def get_run(self, run_id: str) -> PipelineRun | None:
-        return self._latest(self.runs_path, PipelineRun).get(run_id)
+        return self.runs().get(run_id)
 
     def detail(self, conversation_id: str) -> ConversationDetail | None:
         conversation = self.get_conversation(conversation_id)
         if conversation is None:
             return None
-        messages = [m for m in self._latest(self.messages_path, ChatMessage).values() if m.conversationId == conversation_id]
-        runs = [r for r in self._latest(self.runs_path, PipelineRun).values() if r.conversationId == conversation_id]
+        messages = [m for m in self.messages().values() if m.conversationId == conversation_id]
+        runs = [r for r in self.runs().values() if r.conversationId == conversation_id]
         return ConversationDetail(
             **conversation.model_dump(),
             messages=sorted(messages, key=lambda item: item.createdAt),
             runs=sorted(runs, key=lambda item: item.createdAt, reverse=True),
         )
 
+    def list_conversations(self, limit: int, offset: int) -> tuple[list[ConversationSummary], int]:
+        conversations = self._conversations()
+        messages = self.messages()
+        runs = self.runs()
+        summaries: list[ConversationSummary] = []
+        for conversation in conversations.values():
+            conversation_messages = [item for item in messages.values() if item.conversationId == conversation.id]
+            conversation_runs = [item for item in runs.values() if item.conversationId == conversation.id]
+            latest_message = max(conversation_messages, key=lambda item: item.createdAt, default=None)
+            latest_run = max(conversation_runs, key=lambda item: item.updatedAt, default=None)
+            preview = " ".join((latest_message.content if latest_message else "").split())[:160]
+            summaries.append(
+                ConversationSummary(
+                    **conversation.model_dump(),
+                    lastMessagePreview=preview,
+                    lastRunStatus=latest_run.status if latest_run else None,
+                )
+            )
+        summaries.sort(key=lambda item: (item.updatedAt, item.sessionNumber), reverse=True)
+        return summaries[offset : offset + limit], len(summaries)
+
     def mark_incomplete_as_interrupted(self) -> None:
-        for run in self._latest(self.runs_path, PipelineRun).values():
+        for run in self.runs().values():
             if run.status not in TERMINAL_STATES:
                 run.status = "interrupted"
                 run.updatedAt = _now()
                 self.save_run(run)
+
+    def _conversations(self) -> dict[str, Conversation]:
+        return {
+            item_id: item
+            for item_id, item in self._all_conversations().items()
+            if item.deletedAt is None
+        }
+
+    def _all_conversations(self) -> dict[str, Conversation]:
+        self._ensure_session_numbers()
+        if self.store is not None:
+            return {
+                item.id: item
+                for raw in self.store.list("conversations", order_by="updated_at DESC, id DESC")
+                if (item := Conversation.model_validate(raw))
+            }
+        return self._latest(self.conversations_path, Conversation)
+
+    def _ensure_session_numbers(self) -> None:
+        """Backfill durable, human-friendly numbers for conversations created before sessions."""
+        if self.store is not None:
+            return
+        with self._lock:
+            latest_raw: dict[str, dict[str, Any]] = {}
+            if self.conversations_path.exists():
+                for line in self.conversations_path.read_text(encoding="utf-8").splitlines():
+                    try:
+                        raw = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(raw, dict) and raw.get("id"):
+                        latest_raw[str(raw["id"])] = raw
+
+            used: set[int] = set()
+            pending: list[dict[str, Any]] = []
+            for raw in latest_raw.values():
+                session_number = raw.get("sessionNumber")
+                if isinstance(session_number, int) and session_number > 0 and session_number not in used:
+                    used.add(session_number)
+                else:
+                    pending.append(raw)
+
+            next_number = 1
+            for raw in sorted(pending, key=lambda item: (item.get("createdAt", ""), str(item.get("id", "")))):
+                while next_number in used:
+                    next_number += 1
+                raw["sessionNumber"] = next_number
+                used.add(next_number)
+                next_number += 1
+                try:
+                    self.save_conversation(Conversation.model_validate(raw))
+                except ValidationError:
+                    continue
 
     @staticmethod
     def _append(path: Path, record: dict[str, Any]) -> None:
@@ -210,37 +313,135 @@ class PipelineStore:
                 continue
         return records
 
+    def messages(self) -> dict[str, ChatMessage]:
+        if self.store is not None:
+            return {item.id: item for raw in self.store.list("chat_messages", order_by="created_at ASC, id ASC") if (item := ChatMessage.model_validate(raw))}
+        return self._latest(self.messages_path, ChatMessage)
+
+    def runs(self) -> dict[str, PipelineRun]:
+        if self.store is not None:
+            return {item.id: item for raw in self.store.list("pipeline_runs", order_by="updated_at DESC, id DESC") if (item := PipelineRun.model_validate(raw))}
+        return self._latest(self.runs_path, PipelineRun)
+
+    def migrate_legacy_files(self) -> None:
+        if self.store is None:
+            return
+
+        def import_conversations(raw: str) -> None:
+            latest: dict[str, dict[str, Any]] = {}
+            for line in raw.splitlines():
+                try:
+                    item = json.loads(line)
+                    if isinstance(item, dict) and item.get("id"):
+                        latest[str(item["id"])] = item
+                except json.JSONDecodeError:
+                    continue
+            used = {item.get("sessionNumber") for item in latest.values() if isinstance(item.get("sessionNumber"), int)}
+            next_number = 1
+            for item in sorted(latest.values(), key=lambda value: (value.get("createdAt", ""), value["id"])):
+                if not isinstance(item.get("sessionNumber"), int) or item["sessionNumber"] < 1:
+                    while next_number in used:
+                        next_number += 1
+                    item["sessionNumber"] = next_number
+                    used.add(next_number)
+                try:
+                    self.save_conversation(Conversation.model_validate(item))
+                except ValidationError:
+                    continue
+
+        def import_records(path: Path, model: type[BaseModel], save) -> None:
+            def importer(raw: str) -> None:
+                latest: dict[str, BaseModel] = {}
+                for line in raw.splitlines():
+                    try:
+                        item = model.model_validate(json.loads(line))
+                        latest[item.id] = item
+                    except (json.JSONDecodeError, ValidationError, KeyError):
+                        continue
+                for item in latest.values():
+                    save(item)
+            self.store.import_once(path, importer)
+
+        self.store.import_once(self.conversations_path, import_conversations)
+        import_records(self.messages_path, ChatMessage, self.save_message)
+        import_records(self.runs_path, PipelineRun, self.save_run)
+
 
 class PipelineOrchestrator:
     """Runs drafting stages and deliberately has no publishing dependency."""
 
-    def __init__(self, settings: Settings, queue_service: QueueService, client: OpenAIStageClient | None = None) -> None:
+    def __init__(self, settings: Settings, queue_service: QueueService, client: OpenAIStageClient | None = None, store: PostgresStore | None = None) -> None:
         self.settings = settings
         self.queue_service = queue_service
-        self.store = PipelineStore(settings)
+        self.store = PipelineStore(settings, store)
         self.client = client or OpenAIStageClient(settings)
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self.store.mark_incomplete_as_interrupted()
 
     def create_conversation(self, title: str) -> Conversation:
-        now = _now()
-        item = Conversation(id=_id("conversation"), title=title.strip(), createdAt=now, updatedAt=now)
-        self.store.save_conversation(item)
-        return item
+        with self.store._lock:
+            now = _now()
+            session_number = store.next_conversation_session_number() if store is not None else max(
+                (item.sessionNumber for item in self.store._all_conversations().values()), default=0
+            ) + 1
+            item = Conversation(
+                id=_id("conversation"),
+                sessionNumber=session_number,
+                title=title.strip(),
+                createdAt=now,
+                updatedAt=now,
+            )
+            self.store.save_conversation(item)
+            return item
 
     def get_conversation(self, conversation_id: str) -> ConversationDetail | None:
         return self.store.detail(conversation_id)
 
+    def get_conversation_by_number(self, session_number: int) -> ConversationDetail | None:
+        conversation = self.store.get_conversation_by_number(session_number)
+        return self.store.detail(conversation.id) if conversation else None
+
+    def list_conversations(self, limit: int, offset: int) -> tuple[list[ConversationSummary], int]:
+        return self.store.list_conversations(limit, offset)
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Hide a session durably while keeping JSONL history append-only."""
+        with self.store._lock:
+            conversation = self.store.get_conversation(conversation_id)
+            if conversation is None:
+                return False
+
+            for run in self.store.runs().values():
+                if run.conversationId != conversation_id:
+                    continue
+                task = self.tasks.pop(run.id, None)
+                if task is not None and not task.done():
+                    task.cancel()
+                if run.status not in TERMINAL_STATES:
+                    run.status = "interrupted"
+                    run.completedAt = _now()
+                    self._save_run(run, "run_interrupted")
+
+            now = _now()
+            conversation.deletedAt = now
+            conversation.updatedAt = now
+            self.store.save_conversation(conversation)
+            return True
+
     def get_run(self, run_id: str) -> PipelineRun | None:
-        return self.store.get_run(run_id)
+        run = self.store.get_run(run_id)
+        if run is None or self.store.get_conversation(run.conversationId) is None:
+            return None
+        return run
 
     def start(self, conversation_id: str, content: str) -> tuple[ChatMessage, PipelineRun]:
         conversation = self.store.get_conversation(conversation_id)
         if conversation is None:
             raise ValueError("Conversation was not found.")
+        content = content.strip()
         now = _now()
-        message = ChatMessage(id=_id("message"), conversationId=conversation_id, role="user", content=content.strip(), createdAt=now)
+        message = ChatMessage(id=_id("message"), conversationId=conversation_id, role="user", content=content, createdAt=now)
         run = PipelineRun(
             id=_id("pipeline"),
             conversationId=conversation_id,
@@ -250,11 +451,18 @@ class PipelineOrchestrator:
             updatedAt=now,
         )
         message.pipelineRunId = run.id
+        previous_messages = [
+            item
+            for item in self.store.messages().values()
+            if item.conversationId == conversation_id and item.role == "user"
+        ]
+        if not previous_messages:
+            conversation.title = _title_from_prompt(content)
         conversation.updatedAt = now
         self.store.save_message(message)
         self.store.save_conversation(conversation)
         self.store.save_run(run)
-        self.tasks[run.id] = asyncio.create_task(self._execute(run.id, content.strip(), 0))
+        self.tasks[run.id] = asyncio.create_task(self._execute(run.id, content, 0))
         return message, run
 
     def retry(self, run_id: str) -> PipelineRun:
@@ -299,8 +507,9 @@ class PipelineOrchestrator:
         self.subscribers.setdefault(run_id, set()).add(queue)
         try:
             snapshot = self.get_run(run_id)
-            if snapshot:
-                yield self._sse("snapshot", snapshot.model_dump(mode="json"))
+            if snapshot is None:
+                return
+            yield self._sse("snapshot", snapshot.model_dump(mode="json"))
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
@@ -361,6 +570,10 @@ class PipelineOrchestrator:
             pipelineRunId=run.id,
         )
         self.store.save_message(assistant)
+        conversation = self.store.get_conversation(run.conversationId)
+        if conversation is not None:
+            conversation.updatedAt = _now()
+            self.store.save_conversation(conversation)
 
     def _save_run(self, run: PipelineRun, event_type: str, details: dict[str, Any] | None = None) -> None:
         run.updatedAt = _now()
@@ -373,7 +586,7 @@ class PipelineOrchestrator:
             queue.put_nowait({"type": event_type, "data": data})
 
     def _message(self, message_id: str) -> ChatMessage | None:
-        return PipelineStore._latest(self.store.messages_path, ChatMessage).get(message_id)
+        return self.store.messages().get(message_id)
 
     @staticmethod
     def _prompt(run: PipelineRun, message: str, stage: PipelineStage) -> str:
@@ -406,3 +619,8 @@ def _now() -> datetime:
 
 def _id(prefix: str) -> str:
     return f"{prefix}-{_now().strftime('%Y%m%d-%H%M%S-%f')}"
+
+
+def _title_from_prompt(content: str) -> str:
+    normalized = " ".join(content.split())
+    return f"{normalized[:77].rstrip()}…" if len(normalized) > 78 else normalized
