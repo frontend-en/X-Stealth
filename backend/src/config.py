@@ -59,6 +59,13 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_model: str | None = None
+    x_bearer_token: str | None = None
+    trend_radar_timezone: str = "Europe/Moscow"
+    trend_radar_profile: str = (
+        "Русскоязычный рынок России и СНГ: новые легальные и этичные модели заработка с помощью ИИ "
+        "для владельцев малого бизнеса и самостоятельных специалистов"
+    )
+    trend_radar_window_hours: int = Field(default=24, ge=6, le=168)
 
     @field_validator("max_action_delay_ms")
     @classmethod

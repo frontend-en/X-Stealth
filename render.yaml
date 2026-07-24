@@ -22,7 +22,44 @@ services:
         value: "false"
       - key: HEADLESS
         value: "true"
+      - key: DATABASE_URL
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
         sync: false
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: TREND_RADAR_TIMEZONE
+        value: Europe/Moscow
+      - key: TREND_RADAR_WINDOW_HOURS
+        value: "24"
+      - key: TREND_RADAR_PROFILE
+        value: Русскоязычный рынок России и СНГ: новые легальные и этичные модели заработка с помощью ИИ для владельцев малого бизнеса и самостоятельных специалистов
+  - type: cron
+    name: x-stealth-trend-radar
+    repo: https://github.com/frontend-en/X-Stealth
+    runtime: docker
+    region: frankfurt
+    branch: main
+    schedule: "0 6 * * *"
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python -m src.trend_radar_worker
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: TREND_RADAR_TIMEZONE
+        value: Europe/Moscow
+      - key: TREND_RADAR_WINDOW_HOURS
+        value: "24"
+      - key: TREND_RADAR_PROFILE
+        value: Русскоязычный рынок России и СНГ: новые легальные и этичные модели заработка с помощью ИИ для владельцев малого бизнеса и самостоятельных специалистов

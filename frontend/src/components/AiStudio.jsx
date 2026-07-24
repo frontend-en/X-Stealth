@@ -7,6 +7,7 @@ import {
   deleteConversation,
   getConversationBySessionNumber,
   getConversations,
+  getLatestTrendReport,
   getPipelineRun,
   retryPipelineRun,
   sendChatMessage
@@ -20,6 +21,16 @@ const stageIcons = {
   brand_editor: "05",
   fact_policy: "06",
   chief: "07"
+};
+
+const agentProfiles = {
+  trend_research: { russianName: "Аналитик трендов", tint: "#38a3c8", shade: "#d9f3fb" },
+  strategy: { russianName: "Контент-стратег", tint: "#6674d9", shade: "#e6e9ff" },
+  ghostwriter: { russianName: "Автор черновиков", tint: "#a36bd8", shade: "#f2e5ff" },
+  hook_editor: { russianName: "Редактор первой строки", tint: "#ea8a4d", shade: "#fff0e0" },
+  brand_editor: { russianName: "Редактор тона и ясности", tint: "#d55d83", shade: "#ffe6ee" },
+  fact_policy: { russianName: "Проверяющий факты и правила", tint: "#2d9c78", shade: "#dff7ed" },
+  chief: { russianName: "Главный редактор", tint: "#2e607f", shade: "#dcecf5" }
 };
 
 const defaultStages = [
@@ -48,7 +59,7 @@ function statusLabel(status) {
   return { queued: "в очереди", running: "в работе", completed: "завершена", failed: "ошибка", interrupted: "прервана" }[status] || "без запусков";
 }
 
-export default function AiStudio({ sessionNumber, onNavigateSession, onDraftCreated }) {
+export default function AiStudio({ sessionNumber, onNavigateSession, onNavigateTrendRadar, onDraftCreated }) {
   const [sessions, setSessions] = useState([]);
   const [conversation, setConversation] = useState(null);
   const [run, setRun] = useState(null);
@@ -58,6 +69,7 @@ export default function AiStudio({ sessionNumber, onNavigateSession, onDraftCrea
   const [creatingDraft, setCreatingDraft] = useState("");
   const [deletingSession, setDeletingSession] = useState("");
   const [error, setError] = useState("");
+  const [trendReport, setTrendReport] = useState(null);
   const sourceRef = useRef(null);
 
   const refreshSessions = useCallback(async () => {
@@ -126,6 +138,10 @@ export default function AiStudio({ sessionNumber, onNavigateSession, onDraftCrea
       sourceRef.current?.close();
     };
   }, [sessionNumber, loadSession, refreshSessions]);
+
+  useEffect(() => {
+    getLatestTrendReport().then(setTrendReport).catch(() => setTrendReport(null));
+  }, []);
 
   async function submit(event) {
     event.preventDefault();
@@ -254,6 +270,10 @@ export default function AiStudio({ sessionNumber, onNavigateSession, onDraftCrea
 
         <div className="studio-main">
           {sessionNumber && !conversation && !loading ? <div className="state-banner">Сессия №{sessionNumber} не найдена. Выберите существующую или начните новую.</div> : null}
+          {trendReport?.status === "completed" ? <section className="studio-trend-context">
+            <div><p className="eyebrow">Контекст Радара AI-возможностей</p><strong>{trendReport.topic}</strong><span>{trendReport.opportunity?.revenueModel || "Модель дохода уточняется"} · {trendReport.sources?.length || 0} источников</span></div>
+            <button type="button" className="ghost-button" onClick={() => onNavigateTrendRadar?.()}>Открыть радар</button>
+          </section> : null}
           <div className="studio-grid">
             <article className="panel studio-chat">
               <div className="panel-header"><div><p className="eyebrow">Диалог</p><h2>{conversation?.title || "Задача для главного агента"}</h2></div><MessageSquare size={20} /></div>
@@ -284,14 +304,31 @@ export default function AiStudio({ sessionNumber, onNavigateSession, onDraftCrea
               <div className="pipeline-progress"><span style={{ width: `${run?.progress || 0}%` }} /></div>
               <p className="progress-label">{run ? `${run.progress}% · ${statusLabel(run.status)}` : "Ожидание задачи"}</p>
               <div className="agent-cards">
-                {(run?.stages || defaultStages).map((stage) => (
-                  <details className={`agent-card ${stage.status}`} key={stage.id}>
-                    <summary><span className="agent-number">{stageIcons[stage.id]}</span><span><strong>{stage.name}</strong><small>{stage.role}</small></span><StageStatus status={stage.status} /></summary>
+                {(run?.stages || defaultStages).map((stage) => {
+                  const profile = agentProfiles[stage.id] || { russianName: "AI-агент", tint: "#64748b", shade: "#e7edf4" };
+                  return (
+                    <details className={`agent-card ${stage.status}`} key={stage.id}>
+                      <summary>
+                        <span className="agent-identity" aria-hidden="true">
+                          <span className="agent-number">{stageIcons[stage.id]}</span>
+                          <span className="agent-avatar" style={{ "--agent-tint": profile.tint, "--agent-shade": profile.shade }}>
+                            <span className="agent-avatar-head" />
+                            <span className="agent-avatar-body" />
+                          </span>
+                        </span>
+                        <span className="agent-copy">
+                          <strong>{stage.name}</strong>
+                          <span className="agent-russian-name">{profile.russianName}</span>
+                          <small>{stage.role}</small>
+                        </span>
+                        <span className="agent-status"><StageStatus status={stage.status} /></span>
+                      </summary>
                     {stage.summary ? <p>{stage.summary}</p> : null}
                     {stage.error ? <p className="agent-error">{stage.error}</p> : null}
                     {stage.artifacts?.map((artifact, index) => artifact.url ? <a key={`${artifact.url}-${index}`} href={artifact.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />{artifact.title}</a> : <p key={`${artifact.title}-${index}`}>{artifact.title}</p>)}
-                  </details>
-                ))}
+                    </details>
+                  );
+                })}
               </div>
               {run?.status === "failed" ? <button type="button" className="ghost-button" onClick={retry}><RefreshCw size={16} />Повторить упавший этап</button> : null}
             </aside>

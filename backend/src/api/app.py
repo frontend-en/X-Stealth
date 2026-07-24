@@ -45,6 +45,9 @@ from src.api.schemas import (
     UpdateQueueItemRequest,
     ValidatePostRequest,
     ValidationResult,
+    TrendReport,
+    TrendReportListResponse,
+    TrendRadarRunRequest,
 )
 from src.agent.harness import AgentHarness
 from src.agent.pipeline import PipelineOrchestrator
@@ -57,6 +60,7 @@ from src.services.quality_service import QualityService
 from src.services.queue_service import QueueService, validate_post_text
 from src.services.run_service import RunService
 from src.services.settings_service import get_public_settings
+from src.services.trend_radar import TrendRadarService
 
 
 def _cors_origins() -> list[str]:
@@ -176,9 +180,47 @@ def get_pipeline_orchestrator(
     return app.state.pipeline_orchestrator
 
 
+def get_trend_radar_service(
+    settings: Annotated[Settings, Depends(get_settings)], store: Annotated[PostgresStore, Depends(get_store)]
+) -> TrendRadarService:
+    if not hasattr(app.state, "trend_radar_service"):
+        app.state.trend_radar_service = TrendRadarService(settings, store)
+    return app.state.trend_radar_service
+
+
 @app.get("/api/v1/health", response_model=HealthResponse)
 def health(_: Annotated[PostgresStore, Depends(get_store)]) -> HealthResponse:
     return HealthResponse(status="ok", version=app.version, time=datetime.now(timezone.utc))
+
+
+@app.get("/api/v1/trend-radar/latest", response_model=TrendReport | None)
+def latest_trend_report(service: Annotated[TrendRadarService, Depends(get_trend_radar_service)]) -> TrendReport | None:
+    return service.reports.latest()
+
+
+@app.get("/api/v1/trend-radar", response_model=TrendReportListResponse)
+def list_trend_reports(
+    service: Annotated[TrendRadarService, Depends(get_trend_radar_service)],
+    limit: Annotated[int, Query(ge=1, le=90)] = 30,
+) -> TrendReportListResponse:
+    items = service.reports.list(limit=limit)
+    return TrendReportListResponse(items=items, total=len(items))
+
+
+@app.post("/api/v1/trend-radar/run", response_model=TrendReport)
+async def run_trend_radar_now(
+    service: Annotated[TrendRadarService, Depends(get_trend_radar_service)],
+    request: TrendRadarRunRequest | None = None,
+) -> TrendReport:
+    """Manually refresh today's research, optionally around an operator-supplied topic."""
+    try:
+        return await service.run_today(force=True, focus_query=request.query if request else "")
+    except Exception as exc:
+        raise api_error(
+            503,
+            "TREND_RADAR_UNAVAILABLE",
+            "Радар трендов временно недоступен. Проверьте подключение к базе данных и перезапустите backend.",
+        ) from exc
 
 
 @app.post("/api/v1/auth/login", response_model=AuthSessionResponse)

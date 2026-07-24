@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import unittest
+import json
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from src.agent.pipeline import OpenAIStageClient, PipelineOrchestrator, StageResult
-from src.api.schemas import PostCandidate
+from src.api.schemas import PipelineStage, PostCandidate, TrendReport
 from src.config import Settings
 from src.services.queue_service import QueueService
 from tests.fakes import InMemoryStore
@@ -76,6 +79,28 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(restarted.get_conversation_by_number(first.sessionNumber))
         third = restarted.create_conversation("Third")
         self.assertEqual(third.sessionNumber, 3)
+
+    async def test_pipeline_prompt_contains_fresh_trend_radar_context(self) -> None:
+        orchestrator, _ = self._orchestrator()
+        now = datetime.now(timezone.utc)
+        report = TrendReport(
+            id="trend-today",
+            reportDate=now.astimezone(ZoneInfo(orchestrator.settings.trend_radar_timezone)).date().isoformat(),
+            status="completed",
+            topic="AI-автоматизация",
+            summary="Свежий проверенный контекст.",
+            pipelineContext=json.dumps({"topic": "AI-автоматизация", "sources": []}),
+            createdAt=now,
+            updatedAt=now,
+        )
+        orchestrator.trend_reports.save(report)
+        conversation = orchestrator.create_conversation("Test")
+        _, run = orchestrator.start(conversation.id, "Draft a post")
+        await orchestrator.tasks[run.id]
+
+        prompt = json.loads(orchestrator._prompt(run, "Draft a post", PipelineStage(id="chief", name="Chief", role="Chief")))
+        self.assertTrue(prompt["trendRadar"]["available"])
+        self.assertEqual(prompt["trendRadar"]["topic"], "AI-автоматизация")
 
 
 if __name__ == "__main__":

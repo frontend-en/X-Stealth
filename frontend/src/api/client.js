@@ -176,6 +176,21 @@ export function getPipelineRun(runId) {
   return request(`/api/v1/pipeline-runs/${runId}`);
 }
 
+export function getLatestTrendReport() {
+  return request("/api/v1/trend-radar/latest");
+}
+
+export function getTrendReports(limit = 30) {
+  return request(`/api/v1/trend-radar?limit=${limit}`);
+}
+
+export function runTrendRadar(query = "") {
+  return request("/api/v1/trend-radar/run", {
+    method: "POST",
+    body: JSON.stringify({ query })
+  });
+}
+
 export function retryPipelineRun(runId) {
   return request(`/api/v1/pipeline-runs/${runId}/retry`, { method: "POST" });
 }

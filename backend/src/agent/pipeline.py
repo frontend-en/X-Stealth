@@ -24,6 +24,7 @@ from src.api.schemas import (
 from src.config import Settings
 from src.database import PostgresStore
 from src.services.queue_service import QueueService
+from src.services.trend_radar import TrendReportStore
 
 
 STAGES = (
@@ -255,6 +256,7 @@ class PipelineOrchestrator:
         self.queue_service = queue_service
         self.store = PipelineStore(store)
         self.client = client or OpenAIStageClient(settings)
+        self.trend_reports = TrendReportStore(store)
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self.store.mark_incomplete_as_interrupted()
@@ -467,13 +469,22 @@ class PipelineOrchestrator:
     def _message(self, message_id: str) -> ChatMessage | None:
         return self.store.messages().get(message_id)
 
-    @staticmethod
-    def _prompt(run: PipelineRun, message: str, stage: PipelineStage) -> str:
+    def _prompt(self, run: PipelineRun, message: str, stage: PipelineStage) -> str:
         completed = [
             {"stage": item.id, "summary": item.summary, "output": item.output, "warnings": item.warnings}
             for item in run.stages
             if item.status == "completed"
         ]
+        trend_report = self.trend_reports.latest_fresh(self.settings.trend_radar_timezone)
+        trend_context: dict[str, Any] = {
+            "available": False,
+            "message": "Свежий отчёт Радара трендов недоступен; не выдавай устаревший контекст за текущий тренд.",
+        }
+        if trend_report:
+            try:
+                trend_context = {"available": True, **json.loads(trend_report.pipelineContext)}
+            except json.JSONDecodeError:
+                trend_context = {"available": True, "topic": trend_report.topic, "summary": trend_report.summary}
         return json.dumps(
             {
                 "stage": stage.id,
@@ -482,6 +493,7 @@ class PipelineOrchestrator:
                 "language": "Russian unless the operator message is clearly another language",
                 "defaultAudience": "expert B2B",
                 "previousStages": completed,
+                "trendRadar": trend_context,
                 "limits": {"candidateCount": 3, "maxPostCharacters": 280, "maxRevisionCycles": 1},
             },
             ensure_ascii=False,

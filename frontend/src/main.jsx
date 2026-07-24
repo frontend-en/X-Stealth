@@ -25,6 +25,7 @@ import {
   LoaderCircle,
   Play,
   RefreshCw,
+  RadioTower,
   Search,
   Send,
   ShieldCheck,
@@ -48,6 +49,7 @@ import {
   setUnauthorizedHandler
 } from "./api/client";
 import AiStudio from "./components/AiStudio";
+import TrendRadar from "./components/TrendRadar";
 import "./styles.css";
 
 const statusLabels = {
@@ -321,6 +323,9 @@ function routeFromLocation() {
   if (window.location.pathname === "/ai-studio" || window.location.pathname === "/ai-studio/") {
     return { view: "studio", sessionNumber: null };
   }
+  if (window.location.pathname === "/trend-radar" || window.location.pathname === "/trend-radar/") {
+    return { view: "trend", sessionNumber: null };
+  }
   return { view: "dashboard", sessionNumber: null };
 }
 
@@ -446,6 +451,11 @@ function Dashboard({ onLogout }) {
     setRoute({ view: "dashboard", sessionNumber: null });
   }
 
+  function openTrendRadar() {
+    window.history.pushState(null, "", "/trend-radar");
+    setRoute({ view: "trend", sessionNumber: null });
+  }
+
   const filteredQueue = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return queue.filter((item) => {
@@ -532,6 +542,10 @@ function Dashboard({ onLogout }) {
             <Sparkles size={18} aria-hidden="true" />
             AI Studio
           </button>
+          <button type="button" aria-label="Радар AI-возможностей" className={view === "trend" ? "active" : ""} onClick={openTrendRadar}>
+            <RadioTower size={18} aria-hidden="true" />
+            Радар AI-возможностей
+          </button>
           <button type="button" aria-label="Очередь" onClick={() => showDashboardSection("queue")}>
             <CalendarClock size={18} aria-hidden="true" />
             Очередь
@@ -546,7 +560,9 @@ function Dashboard({ onLogout }) {
       </aside>
 
       {view === "studio" ? (
-        <section className="content"><AiStudio sessionNumber={route.sessionNumber} onNavigateSession={openStudio} onDraftCreated={() => { openDashboard(); refresh().catch((err) => setError(err.message)); }} /></section>
+        <section className="content"><AiStudio sessionNumber={route.sessionNumber} onNavigateSession={openStudio} onNavigateTrendRadar={openTrendRadar} onDraftCreated={() => { openDashboard(); refresh().catch((err) => setError(err.message)); }} /></section>
+      ) : view === "trend" ? (
+        <section className="content"><TrendRadar /></section>
       ) : (
       <section className="content" id="overview">
         <header className="topbar">

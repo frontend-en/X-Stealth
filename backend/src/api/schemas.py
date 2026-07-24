@@ -282,6 +282,67 @@ class PipelineArtifact(BaseModel):
     summary: str = ""
 
 
+TrendReportStatus = Literal["running", "completed", "failed", "insufficient_data"]
+TrendSourcePlatform = Literal["reddit", "x", "web"]
+
+
+class TrendSource(BaseModel):
+    platform: TrendSourcePlatform
+    title: str = Field(max_length=300)
+    url: str
+    publishedAt: str | None = None
+    summary: str = Field(default="", max_length=800)
+
+
+class TrendMoodCluster(BaseModel):
+    label: str = Field(max_length=100)
+    description: str = Field(max_length=500)
+
+
+class TrendXSignal(BaseModel):
+    postsCount: int = Field(default=0, ge=0)
+    engagement: int = Field(default=0, ge=0)
+    query: str = ""
+
+
+class TrendOpportunity(BaseModel):
+    audience: str = Field(default="", max_length=300)
+    offer: str = Field(default="", max_length=500)
+    revenueModel: str = Field(default="", max_length=300)
+    validationSteps: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class TrendRadarRunRequest(BaseModel):
+    query: str = Field(default="", max_length=600)
+
+
+class TrendReport(BaseModel):
+    id: str
+    reportDate: str
+    status: TrendReportStatus = "running"
+    focusQuery: str = ""
+    topic: str = ""
+    summary: str = ""
+    whyItRose: list[str] = Field(default_factory=list)
+    precursors: list[str] = Field(default_factory=list)
+    moodClusters: list[TrendMoodCluster] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"] = "low"
+    sources: list[TrendSource] = Field(default_factory=list)
+    xSignal: TrendXSignal = Field(default_factory=TrendXSignal)
+    opportunity: TrendOpportunity = Field(default_factory=TrendOpportunity)
+    warnings: list[str] = Field(default_factory=list)
+    pipelineContext: str = ""
+    error: str | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class TrendReportListResponse(BaseModel):
+    items: list[TrendReport] = Field(default_factory=list)
+    total: int = 0
+
+
 class PostCandidate(BaseModel):
     id: str
     text: str = Field(max_length=280)

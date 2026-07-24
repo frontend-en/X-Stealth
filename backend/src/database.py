@@ -23,6 +23,7 @@ STATE_TABLES = frozenset(
         "conversations",
         "chat_messages",
         "pipeline_runs",
+        "trend_reports",
     }
 )
 
@@ -100,6 +101,14 @@ class PostgresStore:
                     status TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS pipeline_runs_conversation_idx ON pipeline_runs (conversation_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS trend_reports (
+                    id TEXT PRIMARY KEY,
+                    payload JSONB NOT NULL,
+                    report_date DATE NOT NULL UNIQUE,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    status TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS trend_reports_created_idx ON trend_reports (created_at DESC);
                 CREATE TABLE IF NOT EXISTS publish_locks (
                     name TEXT PRIMARY KEY,
                     acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -114,6 +123,22 @@ class PostgresStore:
                 "INSERT INTO schema_migrations (version) VALUES ('002_remove_legacy_file_storage') ON CONFLICT DO NOTHING"
             )
         self._schema_ready = True
+
+    def ensure_trend_reports_schema(self) -> None:
+        """Apply the additive Trend Radar table independently of an already warmed schema cache."""
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trend_reports (
+                    id TEXT PRIMARY KEY,
+                    payload JSONB NOT NULL,
+                    report_date DATE NOT NULL UNIQUE,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    status TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS trend_reports_created_idx ON trend_reports (created_at DESC);
+                """
+            )
 
     def upsert_queue_item(self, payload: dict[str, Any]) -> None:
         self.ensure_schema()
